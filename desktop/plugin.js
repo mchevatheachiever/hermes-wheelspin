@@ -837,7 +837,7 @@ export default {
       id: 'pane',
       area: 'panes',
       title: 'wheel',
-      data: { placement: 'right', width: '320px', height: '440px' },
+      data: { placement: 'right', width: '440px', height: '600px' },
       render: () => jsx(WheelPane, { ctx })
     })
 
