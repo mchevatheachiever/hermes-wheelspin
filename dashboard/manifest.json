@@ -1,0 +1,8 @@
+{
+  "name": "wheelspin",
+  "label": "WheelSpin",
+  "description": "Spin a weighted wheel of any list — the winner is announced in chat.",
+  "icon": "CircleDot",
+  "version": "1.0.0",
+  "api": "plugin_api.py"
+}

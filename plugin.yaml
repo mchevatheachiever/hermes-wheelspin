@@ -1,0 +1,14 @@
+name: wheelspin
+version: 1.0.0
+description: "Spin a real wheel: any list becomes a weighted, animated Desktop wheel that lands on an answer and announces it in chat."
+author: mchevatheachiever
+license: MIT
+homepage: https://github.com/mchevatheachiever/hermes-wheelspin
+requires_hermes: ">=0.21.5"
+tags: [desktop, decision, random, wheel, ui]
+provides_tools:
+  - wheelspin_load
+  - wheelspin_spin
+  - wheelspin_list
+  - wheelspin_delete
+python_dependencies: []
