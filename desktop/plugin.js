@@ -733,6 +733,7 @@ function WheelPane({ ctx }) {
 
       jsx('div', {
         className: 'relative min-h-0 flex-1 overflow-hidden',
+        style: { maxHeight: '74%' },
         children: jsxs('div', {
           className: 'flex h-full min-h-0 items-center justify-center',
           children: [
@@ -797,13 +798,13 @@ function WheelPane({ ctx }) {
         : null,
 
       jsx('div', {
-        className: 'flex min-h-[68px] w-full shrink-0 items-center justify-center px-1',
+        className: 'flex min-h-[116px] w-full shrink-0 items-center justify-center px-1',
         children: result
           ? jsx('div', {
               style: {
                 color: 'var(--ui-accent)',
-                fontSize: '27px',
-                lineHeight: 1.12,
+                fontSize: '52px',
+                lineHeight: 1.05,
                 fontWeight: 800,
                 textAlign: 'center',
                 letterSpacing: '-0.01em',
