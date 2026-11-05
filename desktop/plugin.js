@@ -20,6 +20,10 @@ const ID = 'wheelspin'
 const TAU = Math.PI * 2
 const SLOT_SYMBOLS = ['7', '★', '◆', 'BAR', '♪', '$']
 
+// The palette row needs to reach the mounted pane's spin handler. Module scope
+// is the plugin's own; nothing outside the plugin reads it.
+let spinRequest = null
+
 // Friction model: dω/dt = -K·ω - MU   (viscous + Coulomb)
 const K = 5.2 // 1/s, viscous drag (air + hub)
 const MU = 0.62 // rad/s², bearing friction (constant)
@@ -636,6 +640,13 @@ function WheelPane({ ctx }) {
     rafRef.current = requestAnimationFrame(step)
   }, [announce, ctx, fireJackpot, paint, sound, spinning, wheel, itemsKey])
 
+  useEffect(() => {
+    spinRequest = spin
+    return () => {
+      if (spinRequest === spin) spinRequest = null
+    }
+  }, [spin])
+
   const loadDraft = useCallback(async () => {
     const lines = draft
       .split('\n')
@@ -835,9 +846,11 @@ export default {
       area: 'PALETTE_AREA',
       data: {
         id: `${ID}.spin`,
-        title: 'WheelSpin: spin the active wheel',
+        label: 'WheelSpin: try your luck',
+        keywords: ['wheel', 'spin', 'random', 'pick', 'jackpot'],
         run: () => {
-          host.notify({ kind: 'info', message: 'Open the wheel pane and hit SPIN.' })
+          if (spinRequest) spinRequest()
+          else host.notify({ kind: 'info', message: 'Open the wheel pane first.' })
         }
       }
     })
