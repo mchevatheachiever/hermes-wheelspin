@@ -216,7 +216,6 @@ function drawWheel(canvas, items, rotation, winner, spinning, flapper) {
   const cy = height / 2
   const radius = Math.min(cx, cy) - 18
   const total = items.reduce((sum, item) => sum + item.weight, 0) || 1
-  const showLabels = items.length <= 28
 
   let angle = rotation - Math.PI / 2
   items.forEach((item, index) => {
@@ -235,22 +234,24 @@ function drawWheel(canvas, items, rotation, winner, spinning, flapper) {
     ctx.lineWidth = isWinner ? 2 : 1
     ctx.stroke()
 
-    if (showLabels && sweep > 0.14) {
+    // Label sizing comes from the room the sector actually has: arc length on
+    // the rim sets the font, radial length sets how many characters fit. This
+    // is what lets a 50-item wheel still be readable.
+    const arc = sweep * radius
+    if (arc >= 13) {
       ctx.save()
       ctx.translate(cx, cy)
       ctx.rotate(angle + sweep / 2)
       ctx.textAlign = 'right'
       ctx.textBaseline = 'middle'
-      const size = Math.max(9, Math.min(14, radius * 0.075))
+      const size = Math.max(7, Math.min(14, radius * 0.075, arc * 0.62))
       ctx.font = `${isWinner ? 600 : 400} ${size}px system-ui, sans-serif`
       ctx.fillStyle = isWinner ? accent : label
       const text = String(item.label)
-      const maxChars = Math.max(6, Math.floor(radius / (size * 0.52)) - 3)
-      ctx.fillText(
-        text.length > maxChars ? `${text.slice(0, maxChars - 1)}…` : text,
-        radius - 8,
-        0
-      )
+      const room = radius - 10
+      const maxChars = Math.max(3, Math.floor(room / (size * 0.52)))
+      const shown = text.length > maxChars ? `${text.slice(0, maxChars - 1)}…` : text
+      if (ctx.measureText(shown).width <= room) ctx.fillText(shown, radius - 8, 0)
       ctx.restore()
     }
     angle += sweep
