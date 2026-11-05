@@ -7,8 +7,8 @@ LOAD = {
         "which game to play, who goes first, which task to pick up) or explicitly asks for "
         "the wheel. The user then clicks TRY YOUR LUCK in the Wheel pane, the wheel animates, "
         "and the winning label is announced. Calling this tool does not pick a winner by itself. "
-        "The result carries a `display` field: reproduce it verbatim in a fenced code block so "
-        "the wheel is visible in text-only surfaces. If the user wants an instant answer "
+        "The result carries a `display` field: copy it exactly into one fenced code block, "
+        "character for character, so the wheel is visible in text-only surfaces. If the user wants an instant answer "
         "without the animation, use wheelspin_spin instead."
     ),
     "parameters": {
@@ -54,9 +54,10 @@ SPIN = {
     "description": (
         "Draw an answer immediately from a loaded wheel, without the Desktop animation. "
         "Returns the winning label(s) and their probabilities, plus a `display` field holding "
-        "the wheel already drawn in block characters. ALWAYS reproduce the `display` text "
-        "verbatim in your reply, in a fenced code block — that drawing is the only way the user "
-        "sees the wheel in the CLI, TUI, Discord or any gateway chat. Use this when the user asks "
+        "the wheel already drawn in block characters. Copy the `display` field into your reply "
+        "EXACTLY, character for character, inside ONE fenced code block: do not trim, re-align, "
+        "reflow, re-wrap or summarise it. That drawing is the only way the user sees the wheel "
+        "in the CLI, TUI, Discord or any gateway chat. Use this when the user asks "
         "you to just pick something, when the Desktop app is not in use, or when they want "
         "several draws in a row. If no wheel is loaded it picks from the items passed here."
     ),

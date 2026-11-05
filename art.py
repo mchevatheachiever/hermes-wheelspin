@@ -47,11 +47,16 @@ def render_art(
     items: Sequence[dict[str, Any]],
     winner_index: int | None = None,
     *,
-    width: int = 48,
+    width: int = 44,
     title: str = "",
     jackpot: bool = False,
 ) -> str:
-    """Render a pointer-over-strip wheel plus a legend. Returns plain text."""
+    """Render the wheel as a boxed strip plus a legend.
+
+    Every line starts at column 0 and the pointer marker sits *inside* the strip,
+    so the drawing survives a model re-typing it into a code fence: there is no
+    leading-whitespace alignment to lose. Rendered here, verified in tests.
+    """
     if not items:
         return "(empty wheel)"
 
@@ -60,40 +65,34 @@ def render_art(
     cells = _allocate(weights, width)
 
     # Sector bodies: alternating shades so adjacent sectors never merge, winner solid.
-    body = "".join(
-        (
-            "█" * max(cell, 0)
-            if index == winner_index
-            else ("▓" if index % 2 == 0 else "░") * max(cell, 0)
-        )
-        for index, cell in enumerate(cells)
-    )
-    if len(body) > width:
-        body = body[:width]
-    else:
-        body = body.ljust(width, "·")
+    body = []
+    for index, cell in enumerate(cells):
+        if index == winner_index:
+            body.append("█" * max(cell, 0))
+        else:
+            body.append((("▓") if index % 2 == 0 else ("░")) * max(cell, 0))
+    strip = "".join(body)
+    strip = strip[:width].ljust(width, "·")
 
-    # Pointer column = centre of the winning sector (0-based within the strip).
-    pointer = ""
-    marker = ""
+    # Pointer lives in the strip itself: replace the winning cell with ▼.
     if winner_index is not None and 0 <= winner_index < len(cells):
-        start = sum(cells[:winner_index])
-        centre = start + max(1, cells[winner_index]) // 2
+        centre = sum(cells[:winner_index]) + max(1, cells[winner_index]) // 2
         column = min(max(centre, 0), width - 1)
-        # 3 chars: two spaces then the box's '│', so the glyph lines up with the strip.
-        pointer = "   " + " " * column + "▼"
-        marker = "   " + " " * column + "★"
+        strip = strip[:column] + "▼" + strip[column + 1 :]
 
-    lines = []
-    if title:
-        lines.append(f"  {title}")
-    if pointer:
-        lines.append(pointer)
-    lines.append("  ┌" + "─" * width + "┐")
-    lines.append("  │" + body + "│")
-    lines.append("  └" + ("─" * width) + "┘")
-    if marker:
-        lines.append(marker)
+    header = title or "wheel"
+    room = width - 4
+    if len(header) > room:
+        header = header[: room - 1] + "…"
+    pad = width - len(header) - 2
+    left = pad // 2
+    right = pad - left
+
+    lines = [
+        "╭" + "─" * left + " " + header + " " + "─" * right + "╮",
+        "│" + strip + "│",
+        "╰" + "─" * width + "╯",
+    ]
 
     # Legend: winner first, then by weight, capped so a 200-item wheel stays readable.
     ranked = sorted(range(len(items)), key=lambda i: (-weights[i], i))
@@ -102,30 +101,29 @@ def render_art(
         ranked.insert(0, winner_index)
 
     shown = ranked[:8]
-    label_width = min(28, max((len(str(items[i]["label"])) for i in shown), default=4))
-    bar_width = 12
+    label_width = min(26, max((len(str(items[i]["label"])) for i in shown), default=4))
+    bar_width = 10
     for index in shown:
         share = weights[index] / total
         filled = max(0, min(bar_width, round(share * bar_width)))
-        star = "★" if index == winner_index else " "
-        number = f"{index + 1:>2}"
-        label = str(items[index]["label"])[:label_width].ljust(label_width)
+        star = "★" if index == winner_index else "·"
+        number = f"{index + 1:>3}"
+        name = str(items[index]["label"])[:label_width].ljust(label_width)
         lines.append(
-            f"  {star}{number} {label}  {'█' * filled}{'·' * (bar_width - filled)}"
-            f"  {share * 100:5.1f}%"
+            f"{star}{number} {name} {'█' * filled}{'·' * (bar_width - filled)} {share * 100:5.1f}%"
         )
     if len(items) > len(shown):
         lines.append(f"      … and {len(items) - len(shown)} more")
 
     if jackpot:
-        inner = 34
+        inner = 32
         text = "✦ ✦ ✦  JACKPOT!!!  ✦ ✦ ✦"
         pad = max(0, inner - len(text))
-        left = pad // 2
+        left_pad = pad // 2
         lines.append("")
-        lines.append("  ╔" + "═" * inner + "╗")
-        lines.append("  ║" + " " * left + text + " " * (pad - left) + "║")
-        lines.append("  ╚" + "═" * inner + "╝")
+        lines.append("╔" + "═" * inner + "╗")
+        lines.append("║" + " " * left_pad + text + " " * (pad - left_pad) + "║")
+        lines.append("╚" + "═" * inner + "╝")
 
     return "\n".join(lines)
 

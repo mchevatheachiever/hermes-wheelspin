@@ -88,8 +88,14 @@ class ArtTest(unittest.TestCase):
     def test_bar_matches_requested_width(self):
         items = self.items()
         art_text = art.render_art(items, 2, width=40)
-        row = [line for line in art_text.splitlines() if line.startswith("  │")][0]
-        self.assertEqual(len(row) - 4, 40)  # strip is exactly `width` cells
+        row = [line for line in art_text.splitlines() if line.startswith("│")][0]
+        self.assertEqual(len(row) - 2, 40)  # strip is exactly `width` cells
+
+    def test_every_line_starts_at_column_zero(self):
+        """Models re-type this text; leading whitespace is the first thing lost."""
+        for line in art.render_art(self.items(), 1, jackpot=True).splitlines():
+            if line:
+                self.assertFalse(line.startswith(" "), repr(line))
 
     def test_pointer_present_when_winner_given(self):
         art_text = art.render_art(self.items(), 1)
