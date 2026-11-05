@@ -671,7 +671,7 @@ function WheelPane({ ctx }) {
 
   return jsxs('div', {
     ref: shellRef,
-    className: 'flex h-full min-h-0 flex-col gap-2 p-2 text-sm',
+    className: 'flex h-full min-h-0 flex-col gap-1.5 overflow-hidden p-2 text-sm',
     children: [
       jsxs('div', {
         className: 'flex items-center justify-between gap-2',
@@ -731,7 +731,7 @@ function WheelPane({ ctx }) {
         : null,
 
       jsx('div', {
-        className: 'relative min-h-[190px] flex-1',
+        className: 'relative min-h-0 flex-1 overflow-hidden',
         children: jsxs('div', {
           className: 'flex h-full min-h-0 items-center justify-center',
           children: [
@@ -837,7 +837,7 @@ export default {
       id: 'pane',
       area: 'panes',
       title: 'wheel',
-      data: { placement: 'right', width: '300px' },
+      data: { placement: 'right', width: '320px', height: '440px' },
       render: () => jsx(WheelPane, { ctx })
     })
 
