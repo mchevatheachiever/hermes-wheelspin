@@ -796,12 +796,38 @@ function WheelPane({ ctx }) {
           })
         : null,
 
-      jsx(Button, {
-        variant: 'primary',
-        onClick: spin,
-        disabled: spinning || !items.length,
-        className: 'w-full font-medium tracking-wide',
-        children: spinning ? 'spinning…' : 'Try your luck'
+      jsx('div', {
+        className: 'flex w-full shrink-0 items-center justify-center py-1',
+        children: jsx('button', {
+          type: 'button',
+          onClick: spin,
+          disabled: spinning || !items.length,
+          'aria-label': 'Try your luck',
+          style: {
+            width: '100%',
+            maxWidth: '340px',
+            minHeight: '58px',
+            borderRadius: '999px',
+            border: '3px solid rgba(255,255,255,0.22)',
+            background:
+              'radial-gradient(circle at 50% 26%, #ff5a5a 0%, #e11616 42%, #9c0008 78%, #6d0005 100%)',
+            boxShadow:
+              'inset 0 6px 14px rgba(255,255,255,0.28), inset 0 -10px 18px rgba(0,0,0,0.45), 0 10px 22px rgba(0,0,0,0.55), 0 0 26px rgba(255,40,40,0.28)',
+            color: '#fff',
+            fontSize: '17px',
+            fontWeight: 800,
+            letterSpacing: '0.13em',
+            textTransform: 'uppercase',
+            textShadow: '0 2px 0 rgba(0,0,0,0.45), 0 0 14px rgba(255,220,220,0.55)',
+            cursor: spinning || !items.length ? 'not-allowed' : 'pointer',
+            opacity: spinning || !items.length ? 0.55 : 1,
+            transform: spinning ? 'translateY(2px) scale(0.99)' : 'translateY(0) scale(1)',
+            transition: 'transform 80ms ease-out, filter 120ms ease-out, box-shadow 120ms',
+            userSelect: 'none',
+            lineHeight: 1.1
+          },
+          children: spinning ? 'Good luck…' : 'Try Your Luck!'
+        })
       }),
 
       result
