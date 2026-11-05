@@ -247,7 +247,7 @@ function drawWheel(canvas, items, rotation, winner, spinning, flapper) {
       const size = Math.max(7, Math.min(14, radius * 0.075, arc * 0.62))
       ctx.font = `${isWinner ? 600 : 400} ${size}px system-ui, sans-serif`
       ctx.fillStyle = isWinner ? accent : label
-      const text = String(item.label)
+      const text = String(item.label).toUpperCase()
       const room = radius - 10
       const maxChars = Math.max(3, Math.floor(room / (size * 0.52)))
       const shown = text.length > maxChars ? `${text.slice(0, maxChars - 1)}…` : text

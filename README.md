@@ -8,6 +8,8 @@ A few options on every wheel are hidden **jackpots**. Land on one and the wheel
 gives way to a three-reel slot machine, locks 7-7-7, and fires **JACKPOT!!!**
 with a fanfare.
 
+![WheelSpin pane in the Hermes Desktop app](demo/screenshot.png)
+
 ```
 ╭────────────── wheel: dinner ───────────────╮
 │▓▓▓▓▓▓▓▓▓░░░░░░░░░████▼████░░░░░░░░░▓▓▓▓▓▓▓▓│
@@ -21,8 +23,11 @@ with a fanfare.
 
 ## Demo
 
-`demo/wheelspin-demo.mp4` — 54 seconds, recorded on the Desktop app. Loads a
-CAVE shmup list, spins it under friction, and lands the winner in the chat.
+[`demo/wheelspin-demo.mp4`](demo/wheelspin-demo.mp4) — 54 seconds, silent, recorded
+in the Desktop app: a list goes on the wheel, **Try Your Luck!** spins it, the
+winner lands under the pointer and posts into the chat.
+
+The screenshot above is a frame from that video.
 
 ## Install
 
@@ -58,12 +63,13 @@ the wheel appears in the pane. Press **Try your luck**.
 - **One draw, two surfaces.** The pane and the agent tool share one store
   (`plugin-data/wheelspin/wheels.json`, atomic writes under an advisory lock), so
   a click and a tool call are the same draw.
-- **A wheel that holds thousands.** Up to 60 options the wheel is drawn as real
-  filled sectors with their labels on the rim. Above that the rim becomes a fine
-  drive ring — capped tooth density, the winning sector still drawn as a true
-  wedge — and the readout under the hub names whatever sector is under the
-  pointer as it slows. Drawing 5,000 options costs ~0.1 ms a frame, so the
-  animation stays smooth at any realistic size.
+- **Big wheels stay readable.** Every option is a real sector, and the label is
+  sized from the room that sector actually has — arc length on the rim sets the
+  font, radial length sets how many characters fit — so a 50-item wheel still
+  names its options and a 500-item one degrades to ticks rather than mush.
+- **Labels are upper-case at draw time**, not in the data: the store keeps what
+  you typed (the agent still matches names case-insensitively), and the canvas,
+  the winner line and the CLI art all render upper-case.
 - **Jackpots are cosmetic.** 1–3 options per wheel are flagged at random
   (about one per five, capped at three). They never change the odds; a jackpot is
   only revealed if the winner happens to be one. The store does not expose which
@@ -77,6 +83,11 @@ the wheel appears in the pane. Press **Try your luck**.
 | `wheelspin_spin` | Draw immediately, no UI — CLI, gateway, cron |
 | `wheelspin_list` | Loaded wheels, item counts, recent results |
 | `wheelspin_delete` | Remove a wheel |
+
+Plus a bundled skill (`wheelspin:wheelspin`) that teaches the agent when to reach
+for the wheel, and a `/wheel [name]` slash command that draws and prints the text
+wheel without spending a model turn (standalone CLI sessions only — it is not
+routed through the shared gateway).
 
 ## Surfaces
 
@@ -99,9 +110,15 @@ the wheel appears in the pane. Press **Try your luck**.
 ## Development
 
 ```bash
-python3 -m unittest tests.test_core          # core, art, store (stdlib only)
-hermes plugins validate . --install-deps     # catalog admission gate
+python3 scripts/check_setters.py desktop/plugin.js   # dead-useState guards
+node --check desktop/plugin.js                       # the pane must parse
+python3 -m unittest tests.test_core                  # core, art, store (stdlib only)
+hermes plugins validate . --install-deps             # catalog admission gate
 ```
+
+`check_setters.py` exists because `node --check` cannot see a `setFoo()` whose
+`useState` was deleted: that is valid syntax, and it only throws when the pane
+mounts — which is exactly how this plugin shipped a "failed to render" once.
 
 The API tests need FastAPI (the Hermes runtime venv has it):
 
