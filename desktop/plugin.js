@@ -816,6 +816,7 @@ function WheelPane({ ctx }) {
                 WebkitLineClamp: 2,
                 WebkitBoxOrient: 'vertical',
                 overflow: 'hidden',
+                textTransform: 'uppercase',
                 textShadow: '0 0 20px color-mix(in oklab, var(--ui-accent) 55%, transparent)'
               },
               children: result

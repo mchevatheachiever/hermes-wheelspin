@@ -108,7 +108,7 @@ def render_art(
         filled = max(0, min(bar_width, round(share * bar_width)))
         star = "★" if index == winner_index else "·"
         number = f"{index + 1:>3}"
-        name = str(items[index]["label"])[:label_width].ljust(label_width)
+        name = str(items[index]["label"]).upper()[:label_width].ljust(label_width)
         lines.append(
             f"{star}{number} {name} {'█' * filled}{'·' * (bar_width - filled)} {share * 100:5.1f}%"
         )
