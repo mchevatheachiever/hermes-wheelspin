@@ -682,8 +682,11 @@ function WheelPane({ ctx }) {
           flapperRef.current = flapper
 
           const index = Math.floor((rotationRef.current / TAU) * list.length)
-          if (index !== pegIndex && omega > 0) {
+          // Throttle by time, not by index: a 2000-round belt would otherwise
+          // machine-gun the ticker at frame rate.
+          if (index !== pegIndex && omega > 0 && now - lastTick > 40) {
             pegIndex = index
+            lastTick = now
             if (soundKit) soundKit.tick(omega / Math.max(1, omegaPeak))
           }
 
