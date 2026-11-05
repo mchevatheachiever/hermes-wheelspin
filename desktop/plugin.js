@@ -187,35 +187,6 @@ function sectorGeometry(items, index) {
   return { start, sweep: (items[index].weight / total) * TAU }
 }
 
-/** Which sector sits under a wheel-space angle (radians from 12 o'clock, clockwise). */
-function sectorAt(items, theta) {
-  const total = items.reduce((sum, item) => sum + item.weight, 0) || 1
-  let acc = 0
-  for (let index = 0; index < items.length; index += 1) {
-    const sweep = (items[index].weight / total) * TAU
-    if (theta >= acc && theta < acc + sweep) return index
-    acc += sweep
-  }
-  return items.length - 1
-}
-
-/** Collapse a big wheel into belt cells, so the resting screen is readable too. */
-function topView(items, per = 8) {
-  let view = items.map((item) => ({ label: item.label, weight: item.weight }))
-  while (view.length > per) {
-    const next = []
-    for (let index = 0; index < view.length; index += per) {
-      const chunk = view.slice(index, index + per)
-      next.push({
-        label: `${next.length + 1}`,
-        weight: chunk.reduce((sum, entry) => sum + entry.weight, 0)
-      })
-    }
-    view = next
-  }
-  return view
-}
-
 /* -------------------------------------------------------------------------- */
 /* canvas wheel                                                              */
 /* -------------------------------------------------------------------------- */
@@ -243,93 +214,128 @@ function drawWheel(canvas, items, rotation, winner, spinning, flapper) {
 
   const cx = width / 2
   const cy = height / 2
-  const radius = Math.min(cx, cy) - 18
+  const radius = Math.min(cx, cy) - 20
   const total = items.reduce((sum, item) => sum + item.weight, 0) || 1
-  const showLabels = items.length <= 28
 
-  let angle = rotation - Math.PI / 2
-  items.forEach((item, index) => {
-    const sweep = (item.weight / total) * TAU
-    const isWinner = winner === index && !spinning
+  // Where each round sits on the feed ring, as a fraction of the whole belt.
+  const fracStart = new Array(items.length)
+  let acc = 0
+  for (let index = 0; index < items.length; index += 1) {
+    fracStart[index] = acc / total
+    acc += items[index].weight
+  }
 
-    ctx.beginPath()
-    ctx.moveTo(cx, cy)
-    ctx.arc(cx, cy, radius, angle, angle + sweep)
-    ctx.closePath()
-    ctx.globalAlpha = isWinner ? 0.95 : 0.13 + 0.09 * (index % 3)
-    ctx.fillStyle = accent
-    ctx.fill()
-    ctx.globalAlpha = 1
-    ctx.strokeStyle = stroke
-    ctx.lineWidth = isWinner ? 2 : 1
-    ctx.stroke()
-
-    if (showLabels && sweep > 0.14) {
-      ctx.save()
-      ctx.translate(cx, cy)
-      ctx.rotate(angle + sweep / 2)
-      ctx.textAlign = 'right'
-      ctx.textBaseline = 'middle'
-      const size = Math.max(9, Math.min(14, radius * 0.075))
-      ctx.font = `${isWinner ? 600 : 400} ${size}px system-ui, sans-serif`
-      ctx.fillStyle = isWinner ? accent : label
-      const text = String(item.label)
-      const maxChars = Math.max(6, Math.floor(radius / (size * 0.52)) - 3)
-      ctx.fillText(
-        text.length > maxChars ? `${text.slice(0, maxChars - 1)}…` : text,
-        radius - 8,
-        0
-      )
-      ctx.restore()
-    }
-    angle += sweep
-  })
-
-  // pegs on the rim — one per sector boundary, these are what the ticker hits
-  items.forEach((item, index) => {
-    const { start } = sectorGeometry(items, index)
-    const pegAngle = rotation - Math.PI / 2 + start
-    const px = cx + Math.cos(pegAngle) * (radius - 2)
-    const py = cy + Math.sin(pegAngle) * (radius - 2)
-    ctx.beginPath()
-    ctx.arc(px, py, 2.2, 0, TAU)
-    ctx.globalAlpha = 0.55
-    ctx.fillStyle = stroke
-    ctx.fill()
-    ctx.globalAlpha = 1
-  })
-
-  // hub
+  const body = ctx.createRadialGradient(cx, cy, radius * 0.2, cx, cy, radius)
+  body.addColorStop(0, 'transparent')
+  body.addColorStop(1, accent)
+  ctx.globalAlpha = 0.07
   ctx.beginPath()
-  ctx.arc(cx, cy, Math.max(6, radius * 0.075), 0, TAU)
-  ctx.globalAlpha = 0.85
+  ctx.arc(cx, cy, radius, 0, TAU)
+  ctx.fillStyle = body
+  ctx.fill()
+  ctx.globalAlpha = 1
+
+  ctx.beginPath()
+  ctx.arc(cx, cy, radius, 0, TAU)
+  ctx.lineWidth = 1
+  ctx.strokeStyle = stroke
+  ctx.stroke()
+
+  // The pointer sits at 12 o'clock; the belt feeds past it, so only the top arc
+  // needs drawing. This is what lets a thousand options cycle without clutter.
+  const pointerFrac = (((-rotation / TAU) % 1) + 1) % 1
+  const WINDOW = 0.085 // ±8.5% of the belt either side of the pointer
+  const pointerAngle = -Math.PI / 2
+
+  const indexAt = (f) => {
+    let lo = 0
+    let hi = items.length - 1
+    let found = 0
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1
+      if (fracStart[mid] <= f) {
+        found = mid
+        lo = mid + 1
+      } else {
+        hi = mid - 1
+      }
+    }
+    return found
+  }
+
+  const startFraction = pointerFrac - WINDOW
+  const startIndex = indexAt(((startFraction % 1) + 1) % 1)
+  let base = startFraction < 0 ? -1 : 0
+  let previous = null
+  const visible = []
+  const limit = Math.min(items.length, 96)
+
+  for (let step = 0; step < limit; step += 1) {
+    const index = (startIndex + step) % items.length
+    const fraction = fracStart[index]
+    if (previous !== null && fraction < previous) base += 1
+    previous = fraction
+    const rel = fraction + base - pointerFrac
+    if (rel > WINDOW) break
+    if (rel >= -WINDOW) visible.push({ index, rel })
+  }
+
+  visible.forEach(({ index, rel }) => {
+    const angle = pointerAngle + rel * TAU
+    const isWinner = winner === index && !spinning
+    const cos = Math.cos(angle)
+    const sin = Math.sin(angle)
+
+    // the round itself, riding the rim
+    ctx.beginPath()
+    ctx.moveTo(cx + cos * (radius - 7), cy + sin * (radius - 7))
+    ctx.lineTo(cx + cos * (radius + 1), cy + sin * (radius + 1))
+    ctx.lineWidth = isWinner ? 3 : 1.5
+    ctx.strokeStyle = isWinner ? accent : stroke
+    ctx.globalAlpha = isWinner ? 1 : 0.8
+    ctx.stroke()
+    ctx.globalAlpha = 1
+
+    // name the rounds nearest the pointer; the far ones stay ticks
+    if (Math.abs(rel) > 0.034) return
+
+    const item = items[index]
+    ctx.save()
+    ctx.translate(cx + cos * (radius - 14), cy + sin * (radius - 14))
+    ctx.rotate(angle + Math.PI / 2)
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    const size = Math.max(8, Math.min(11, radius * 0.055))
+    ctx.font = `${isWinner ? 700 : 500} ${size}px system-ui, sans-serif`
+    ctx.fillStyle = isWinner ? accent : label
+    const text = String(item.label)
+    const room = Math.floor((radius * 0.42) / (size * 0.55))
+    ctx.fillText(text.length > room ? `${text.slice(0, room - 1)}…` : text, 0, 0)
+    ctx.restore()
+  })
+
+  ctx.beginPath()
+  ctx.arc(cx, cy, Math.max(5, radius * 0.06), 0, TAU)
+  ctx.globalAlpha = 0.8
   ctx.fillStyle = accent
   ctx.fill()
   ctx.globalAlpha = 1
 
-  // ticker arm pivoting at the top, deflected by the pegs
-  const pivotX = cx
-  const pivotY = 6
+  // ticker arm at the top, kicked by the rounds going past
   ctx.save()
-  ctx.translate(pivotX, pivotY)
+  ctx.translate(cx, 6)
   ctx.rotate(flapper)
   ctx.beginPath()
   ctx.moveTo(0, 0)
-  ctx.lineTo(0, 16)
+  ctx.lineTo(0, 15)
   ctx.lineWidth = 3
   ctx.lineCap = 'round'
   ctx.strokeStyle = accent
   ctx.stroke()
   ctx.restore()
 
-  ctx.beginPath()
-  ctx.arc(pivotX, pivotY, 2.6, 0, TAU)
-  ctx.fillStyle = accent
-  ctx.fill()
-
-  // Live readout: the sector currently under the pointer, updating as it rolls.
-  const theta = (((-rotation % TAU) + TAU) % TAU)
-  const under = sectorAt(items, theta)
+  // readout: the round under the pointer right now
+  const under = indexAt(pointerFrac)
   const showing = winner !== null && !spinning ? winner : under
   const entry = items[showing]
   if (!entry) return
@@ -338,17 +344,13 @@ function drawWheel(canvas, items, rotation, winner, spinning, flapper) {
   ctx.font = `${spinning ? 500 : 700} ${fontSize}px system-ui, sans-serif`
   const text = String(entry.label)
   const maxWidth = width - 24
-  let measured = ctx.measureText(text).width
   let clipped = text
-  if (measured > maxWidth) {
+  if (ctx.measureText(text).width > maxWidth) {
     let cut = text
-    while (cut.length > 1 && ctx.measureText(`${cut}…`).width > maxWidth) {
-      cut = cut.slice(0, -1)
-    }
+    while (cut.length > 1 && ctx.measureText(`${cut}…`).width > maxWidth) cut = cut.slice(0, -1)
     clipped = `${cut}…`
-    measured = ctx.measureText(clipped).width
   }
-
+  const measured = ctx.measureText(clipped).width
   const boxHeight = fontSize + 12
   const boxWidth = Math.min(maxWidth, measured + 20)
   const boxX = cx - boxWidth / 2
@@ -371,12 +373,12 @@ function drawWheel(canvas, items, rotation, winner, spinning, flapper) {
     ctx.roundRect(boxX, boxY, boxWidth, boxHeight, 7)
     ctx.stroke()
   }
-
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
   ctx.fillStyle = winner !== null && !spinning ? accent : label
   ctx.fillText(clipped, cx, boxY + boxHeight / 2 + 0.5)
 }
+
 
 /* -------------------------------------------------------------------------- */
 /* jackpot reveal — three reels, then the banner                             */
@@ -475,7 +477,6 @@ function WheelPane({ ctx }) {
   const [spinning, setSpinning] = useState(false)
   const [winner, setWinner] = useState(null)
   const [result, setResult] = useState('')
-  const [beltNote, setBeltNote] = useState('')
   const [sound, setSound] = useState(true)
   const [sendToChat, setSendToChat] = useState(true)
   const [draft, setDraft] = useState('')
@@ -520,7 +521,7 @@ function WheelPane({ ctx }) {
   }, [spinning, winner])
 
   useEffect(() => {
-    itemsRef.current = topView(items)
+    itemsRef.current = items.map((item) => ({ label: item.label, weight: item.weight }))
     setWinner(null)
     setResult('')
     setBeltNote('')
@@ -719,44 +720,15 @@ function WheelPane({ ctx }) {
 
   const runStages = useCallback(
     async (outcome, target, soundKit) => {
-      // Big wheels arrive as a path: belts first, then the belt-load that holds
-      // the winner. Only the last two stages are worth animating — the earlier
-      // ones are belt selection, shown as a text chain instead of three spins.
-      const fullPath = Array.isArray(outcome.path) ? outcome.path : []
-      const skipped = fullPath.length > 2 ? fullPath.slice(0, -2) : []
-      if (skipped.length) {
-        setBeltNote(
-          `belt ${skipped.map((stage) => stage.chosen + 1).join(' › ')} of ${outcome.belts}`
-        )
-      }
-      const stages = fullPath.length
-        ? fullPath.slice(-2)
-        : [
-            {
-              labels: itemsRef.current.map((item) => item.label),
-              weights: itemsRef.current.map((item) => item.weight),
-              chosen: target.index
-            }
-          ]
+      // One continuous feed: the belt carries every option past the pointer, so
+      // thousands cycle through without any of them becoming a sliver.
+      const labels = items.map((item) => item.label)
+      const weights = items.map((item) => item.weight)
+      await animateStage({ labels, weights, chosen: target.index }, soundKit)
 
-      for (let index = 0; index < stages.length; index += 1) {
-        if (index > 0) {
-          // the belt click-in: a beat between stages
-          setTick((value) => value + 1)
-          await new Promise((done) => setTimeout(done, 340))
-        }
-        await animateStage(stages[index], soundKit)
-      }
-
-      const finalStage = stages[stages.length - 1]
       setSpinning(false)
-      setWinner(finalStage.chosen)
+      setWinner(target.index)
       setResult(target.label)
-      if (skipped.length) {
-        setBeltNote(
-          `belt ${fullPath.map((stage) => stage.chosen + 1).join(' › ')} of ${outcome.belts}`
-        )
-      }
       setTick((value) => value + 1)
       haptic('tap')
 
@@ -767,7 +739,7 @@ function WheelPane({ ctx }) {
         announce(target.label)
       }
     },
-    [animateStage, announce, fireJackpot]
+    [announce, animateStage, fireJackpot, items]
   )
 
   const spin = useCallback(async () => {
@@ -837,7 +809,7 @@ function WheelPane({ ctx }) {
           wheel && wheel.items.length > 8
             ? jsx('span', {
                 className: 'shrink-0 text-[0.625rem] text-(--ui-text-quaternary)',
-                children: `${wheel.items.length} · ${Math.ceil(wheel.items.length / 8)} belts`
+                children: `${wheel.items.length} on the belt`
               })
             : null,
           jsxs('div', {
@@ -974,12 +946,6 @@ function WheelPane({ ctx }) {
           })
         : null,
 
-      beltNote
-        ? jsx('div', {
-            className: 'truncate text-center text-[0.625rem] text-(--ui-text-quaternary)',
-            children: beltNote
-          })
-        : null,
 
       error
         ? jsx('div', {
