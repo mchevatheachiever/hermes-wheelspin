@@ -83,15 +83,15 @@ function makeBlip() {
       const osc = ctx.createOscillator()
       const gain = ctx.createGain()
       osc.type = 'square'
-      osc.frequency.value = 300 + Math.random() * 140
+      osc.frequency.value = 620 + Math.random() * 90
       const now = ctx.currentTime
-      const peak = 0.022 + 0.028 * Math.max(0, Math.min(1, gainScale))
+      const peak = 0.012 + 0.016 * Math.max(0, Math.min(1, gainScale))
       gain.gain.setValueAtTime(peak, now)
-      gain.gain.exponentialRampToValueAtTime(0.0006, now + 0.03)
+      gain.gain.exponentialRampToValueAtTime(0.0004, now + 0.022)
       osc.connect(gain)
       gain.connect(ctx.destination)
       osc.start(now)
-      osc.stop(now + 0.035)
+      osc.stop(now + 0.026)
     } catch {
       /* audio is garnish — never break the spin */
     }
@@ -102,15 +102,14 @@ function makeBlip() {
     try {
       const ctx = context()
       if (!ctx) return
-      noise(ctx, 0.13, 0.16, 1800)
       const now = ctx.currentTime
       const osc = ctx.createOscillator()
       const gain = ctx.createGain()
       osc.type = 'sine'
       osc.frequency.setValueAtTime(190, now)
-      osc.frequency.exponentialRampToValueAtTime(72, now + 0.16)
-      gain.gain.setValueAtTime(0.18, now)
-      gain.gain.exponentialRampToValueAtTime(0.0008, now + 0.2)
+      osc.frequency.exponentialRampToValueAtTime(76, now + 0.14)
+      gain.gain.setValueAtTime(0.16, now)
+      gain.gain.exponentialRampToValueAtTime(0.0008, now + 0.18)
       osc.connect(gain)
       gain.connect(ctx.destination)
       osc.start(now)
@@ -688,7 +687,7 @@ function WheelPane({ ctx }) {
           const index = Math.floor((rotationRef.current / TAU) * list.length)
           // Throttle by time, not by index: a 2000-round belt would otherwise
           // machine-gun the ticker at frame rate.
-          if (index !== pegIndex && omega > 0 && now - lastTick > 40) {
+          if (index !== pegIndex && omega > 0 && now - lastTick > 55) {
             pegIndex = index
             lastTick = now
             if (soundKit) soundKit.tick(omega / Math.max(1, omegaPeak))
@@ -807,7 +806,7 @@ function WheelPane({ ctx }) {
 
   return jsxs('div', {
     ref: shellRef,
-    className: 'flex h-full min-h-0 flex-col gap-2 p-2 text-sm',
+    className: 'flex h-full min-h-0 flex-col gap-1.5 overflow-hidden p-2 text-sm',
     children: [
       jsxs('div', {
         className: 'flex items-center justify-between gap-2',
@@ -873,7 +872,7 @@ function WheelPane({ ctx }) {
         : null,
 
       jsx('div', {
-        className: 'relative min-h-[190px] flex-1',
+        className: 'relative min-h-0 flex-1 overflow-hidden',
         children: jsxs('div', {
           className: 'flex h-full min-h-0 items-center justify-center',
           children: [
@@ -980,7 +979,7 @@ export default {
       id: 'pane',
       area: 'panes',
       title: 'wheel',
-      data: { placement: 'right', width: '300px' },
+      data: { placement: 'right', width: '320px', height: '420px' },
       render: () => jsx(WheelPane, { ctx })
     })
 
