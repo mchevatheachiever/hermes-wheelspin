@@ -503,7 +503,8 @@ function WheelPane({ ctx }) {
   const itemsKey = wheel ? `${wheel.id}:${wheel.updated_at}` : 'none'
 
   const paint = useCallback(() => {
-    if (canvasRef.current) {
+    if (!canvasRef.current) return
+    try {
       drawWheel(
         canvasRef.current,
         itemsRef.current,
@@ -512,6 +513,9 @@ function WheelPane({ ctx }) {
         spinning,
         flapperRef.current
       )
+    } catch (err) {
+      // A draw error must never take the pane down; surface it instead.
+      setError(`draw: ${err && err.message ? err.message : err}`)
     }
   }, [spinning, winner])
 
@@ -641,6 +645,24 @@ function WheelPane({ ctx }) {
         let pegIndex = Math.floor(((from + TAU * 0.25) / TAU) * list.length)
         let flapper = 0
         let settleFrames = 0
+        let finished = false
+
+        // Watchdog: if rAF never fires (window occluded, GPU stall), the spin
+        // must still end instead of leaving the pane stuck on "spinning…".
+        const finish = () => {
+          if (finished) return
+          finished = true
+          clearTimeout(hardStop)
+          rotationRef.current = from + distance
+          flapperRef.current = 0
+          try {
+            paint()
+          } catch {
+            /* paint already reports its own errors */
+          }
+          resolve()
+        }
+        const hardStop = setTimeout(finish, 9000)
 
         const step = (now) => {
           const dt = Math.min(0.05, Math.max(0.001, (now - last) / 1000))
@@ -687,12 +709,65 @@ function WheelPane({ ctx }) {
           rotationRef.current = from + distance
           flapperRef.current = 0
           paint()
-          resolve()
+          finish()
         }
 
         rafRef.current = requestAnimationFrame(step)
       }),
     [paint]
+  )
+
+  const runStages = useCallback(
+    async (outcome, target, soundKit) => {
+      // Big wheels arrive as a path: belts first, then the belt-load that holds
+      // the winner. Only the last two stages are worth animating — the earlier
+      // ones are belt selection, shown as a text chain instead of three spins.
+      const fullPath = Array.isArray(outcome.path) ? outcome.path : []
+      const skipped = fullPath.length > 2 ? fullPath.slice(0, -2) : []
+      if (skipped.length) {
+        setBeltNote(
+          `belt ${skipped.map((stage) => stage.chosen + 1).join(' › ')} of ${outcome.belts}`
+        )
+      }
+      const stages = fullPath.length
+        ? fullPath.slice(-2)
+        : [
+            {
+              labels: itemsRef.current.map((item) => item.label),
+              weights: itemsRef.current.map((item) => item.weight),
+              chosen: target.index
+            }
+          ]
+
+      for (let index = 0; index < stages.length; index += 1) {
+        if (index > 0) {
+          // the belt click-in: a beat between stages
+          setTick((value) => value + 1)
+          await new Promise((done) => setTimeout(done, 340))
+        }
+        await animateStage(stages[index], soundKit)
+      }
+
+      const finalStage = stages[stages.length - 1]
+      setSpinning(false)
+      setWinner(finalStage.chosen)
+      setResult(target.label)
+      if (skipped.length) {
+        setBeltNote(
+          `belt ${fullPath.map((stage) => stage.chosen + 1).join(' › ')} of ${outcome.belts}`
+        )
+      }
+      setTick((value) => value + 1)
+      haptic('tap')
+
+      if (outcome.jackpot) {
+        fireJackpot(target.label, soundKit)
+        announce(`JACKPOT!!! ${target.label}`)
+      } else {
+        announce(target.label)
+      }
+    },
+    [animateStage, announce, fireJackpot]
   )
 
   const spin = useCallback(async () => {
@@ -707,63 +782,20 @@ function WheelPane({ ctx }) {
     const soundKit = sound ? makeBlip() : null
     if (soundKit) soundKit.press()
 
-    let outcome
     try {
-      outcome = await ctx.rest(`/wheels/${encodeURIComponent(wheel.id)}/spin`, {
+      const outcome = await ctx.rest(`/wheels/${encodeURIComponent(wheel.id)}/spin`, {
         method: 'POST',
         body: { count: 1 }
       })
+      if (!outcome || !Array.isArray(outcome.winners) || !outcome.winners.length) {
+        throw new Error('no winner in the spin response')
+      }
+      await runStages(outcome, outcome.winners[0], soundKit)
     } catch (err) {
       setSpinning(false)
-      setError(`spin failed: ${err && err.message ? err.message : err}`)
-      return
+      setError(`spin: ${err && err.message ? err.message : String(err)}`)
     }
-
-    const target = outcome.winners[0]
-    // Big wheels arrive as a path: belts first, then the belt-load that holds
-    // the winner. Only the last two stages are worth animating — the earlier
-    // ones are belt selection, shown as a text chain instead of three spins.
-    const fullPath = Array.isArray(outcome.path) ? outcome.path : []
-    const skipped = fullPath.length > 2 ? fullPath.slice(0, -2) : []
-    if (skipped.length) {
-      setBeltNote(`belt ${skipped.map((stage) => stage.chosen + 1).join(" › ")} of ${outcome.belts}`)
-    }
-    const stages = fullPath.length
-      ? fullPath.slice(-2)
-      : [
-          {
-            labels: itemsRef.current.map((item) => item.label),
-            weights: itemsRef.current.map((item) => item.weight),
-            chosen: target.index
-          }
-        ]
-
-    for (let index = 0; index < stages.length; index += 1) {
-      if (index > 0) {
-        // the belt click-in: a beat between stages
-        setTick((value) => value + 1)
-        await new Promise((done) => setTimeout(done, 340))
-      }
-      await animateStage(stages[index], soundKit)
-    }
-
-    const finalStage = stages[stages.length - 1]
-    setSpinning(false)
-    setWinner(finalStage.chosen)
-    setResult(target.label)
-    if (skipped.length) {
-      setBeltNote(`belt ${fullPath.map((stage) => stage.chosen + 1).join(" › ")} of ${outcome.belts}`)
-    }
-    setTick((value) => value + 1)
-    haptic('tap')
-
-    if (outcome.jackpot) {
-      fireJackpot(target.label, soundKit)
-      announce(`JACKPOT!!! ${target.label}`)
-    } else {
-      announce(target.label)
-    }
-  }, [announce, animateStage, ctx, fireJackpot, sound, spinning, wheel, itemsKey])
+  }, [ctx, runStages, sound, spinning, wheel])
 
   useEffect(() => {
     spinRequest = spin
