@@ -19,6 +19,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 const ID = 'wheelspin'
 const TAU = Math.PI * 2
 const SLOT_SYMBOLS = ['7', '★', '◆', 'BAR', '♪', '$']
+const DENSE_THRESHOLD = 60 // above this the rim is drawn as a drive ring
 
 // The palette row needs to reach the mounted pane's spin handler. Module scope
 // is the plugin's own; nothing outside the plugin reads it.
@@ -216,103 +217,100 @@ function drawWheel(canvas, items, rotation, winner, spinning, flapper) {
   const cy = height / 2
   const radius = Math.min(cx, cy) - 20
   const total = items.reduce((sum, item) => sum + item.weight, 0) || 1
+  const dense = items.length > DENSE_THRESHOLD
 
-  // Where each round sits on the feed ring, as a fraction of the whole belt.
-  const fracStart = new Array(items.length)
+  // Where each sector starts, as a fraction of the whole wheel.
+  const fracStart = new Float64Array(items.length)
   let acc = 0
   for (let index = 0; index < items.length; index += 1) {
     fracStart[index] = acc / total
     acc += items[index].weight
   }
 
-  const body = ctx.createRadialGradient(cx, cy, radius * 0.2, cx, cy, radius)
-  body.addColorStop(0, 'transparent')
-  body.addColorStop(1, accent)
-  ctx.globalAlpha = 0.07
-  ctx.beginPath()
-  ctx.arc(cx, cy, radius, 0, TAU)
-  ctx.fillStyle = body
-  ctx.fill()
-  ctx.globalAlpha = 1
+  const angleOf = (fraction) => (fraction + rotation / TAU) * TAU - Math.PI / 2
 
-  ctx.beginPath()
-  ctx.arc(cx, cy, radius, 0, TAU)
-  ctx.lineWidth = 1
-  ctx.strokeStyle = stroke
-  ctx.stroke()
-
-  // The pointer sits at 12 o'clock; the belt feeds past it, so only the top arc
-  // needs drawing. This is what lets a thousand options cycle without clutter.
-  const pointerFrac = (((-rotation / TAU) % 1) + 1) % 1
-  const WINDOW = 0.085 // ±8.5% of the belt either side of the pointer
-  const pointerAngle = -Math.PI / 2
-
-  const indexAt = (f) => {
-    let lo = 0
-    let hi = items.length - 1
-    let found = 0
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1
-      if (fracStart[mid] <= f) {
-        found = mid
-        lo = mid + 1
-      } else {
-        hi = mid - 1
-      }
-    }
-    return found
-  }
-
-  const startFraction = pointerFrac - WINDOW
-  const startIndex = indexAt(((startFraction % 1) + 1) % 1)
-  let base = startFraction < 0 ? -1 : 0
-  let previous = null
-  const visible = []
-  const limit = Math.min(items.length, 96)
-
-  for (let step = 0; step < limit; step += 1) {
-    const index = (startIndex + step) % items.length
-    const fraction = fracStart[index]
-    if (previous !== null && fraction < previous) base += 1
-    previous = fraction
-    const rel = fraction + base - pointerFrac
-    if (rel > WINDOW) break
-    if (rel >= -WINDOW) visible.push({ index, rel })
-  }
-
-  visible.forEach(({ index, rel }) => {
-    const angle = pointerAngle + rel * TAU
-    const isWinner = winner === index && !spinning
-    const cos = Math.cos(angle)
-    const sin = Math.sin(angle)
-
-    // the round itself, riding the rim
+  if (dense) {
+    // Thousands of sectors cannot be filled individually at this size, so the
+    // rim becomes a fine drive ring: teeth at a capped density, the winning
+    // sector still drawn as a real wedge, and the readout naming the round
+    // under the pointer.
     ctx.beginPath()
-    ctx.moveTo(cx + cos * (radius - 7), cy + sin * (radius - 7))
-    ctx.lineTo(cx + cos * (radius + 1), cy + sin * (radius + 1))
-    ctx.lineWidth = isWinner ? 3 : 1.5
-    ctx.strokeStyle = isWinner ? accent : stroke
-    ctx.globalAlpha = isWinner ? 1 : 0.8
+    ctx.arc(cx, cy, radius, 0, TAU)
+    ctx.fillStyle = accent
+    ctx.globalAlpha = 0.05
+    ctx.fill()
+    ctx.globalAlpha = 1
+    ctx.strokeStyle = stroke
+    ctx.lineWidth = 1
     ctx.stroke()
+
+    const teeth = Math.min(items.length, 360)
+    const step = Math.max(1, Math.floor(items.length / teeth))
+    ctx.strokeStyle = stroke
+    ctx.lineWidth = 1
+    ctx.globalAlpha = 0.45
+    for (let index = 0; index < items.length; index += step) {
+      const angle = angleOf(fracStart[index])
+      const cos = Math.cos(angle)
+      const sin = Math.sin(angle)
+      ctx.beginPath()
+      ctx.moveTo(cx + cos * (radius - 5), cy + sin * (radius - 5))
+      ctx.lineTo(cx + cos * radius, cy + sin * radius)
+      ctx.stroke()
+    }
     ctx.globalAlpha = 1
 
-    // name the rounds nearest the pointer; the far ones stay ticks
-    if (Math.abs(rel) > 0.034) return
+    if (winner !== null && winner < items.length) {
+      const from = angleOf(fracStart[winner])
+      const sweep = (items[winner].weight / total) * TAU
+      ctx.beginPath()
+      ctx.moveTo(cx, cy)
+      ctx.arc(cx, cy, radius, from, from + Math.max(sweep, 0.012))
+      ctx.closePath()
+      ctx.globalAlpha = spinning ? 0.35 : 0.9
+      ctx.fillStyle = accent
+      ctx.fill()
+      ctx.globalAlpha = 1
+    }
+  } else {
+    let angle = rotation - Math.PI / 2
+    items.forEach((item, index) => {
+      const sweep = (item.weight / total) * TAU
+      const isWinner = winner === index && !spinning
 
-    const item = items[index]
-    ctx.save()
-    ctx.translate(cx + cos * (radius - 14), cy + sin * (radius - 14))
-    ctx.rotate(angle + Math.PI / 2)
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'middle'
-    const size = Math.max(8, Math.min(11, radius * 0.055))
-    ctx.font = `${isWinner ? 700 : 500} ${size}px system-ui, sans-serif`
-    ctx.fillStyle = isWinner ? accent : label
-    const text = String(item.label)
-    const room = Math.floor((radius * 0.42) / (size * 0.55))
-    ctx.fillText(text.length > room ? `${text.slice(0, room - 1)}…` : text, 0, 0)
-    ctx.restore()
-  })
+      ctx.beginPath()
+      ctx.moveTo(cx, cy)
+      ctx.arc(cx, cy, radius, angle, angle + sweep)
+      ctx.closePath()
+      ctx.globalAlpha = isWinner ? 0.95 : 0.13 + 0.09 * (index % 3)
+      ctx.fillStyle = accent
+      ctx.fill()
+      ctx.globalAlpha = 1
+      ctx.strokeStyle = stroke
+      ctx.lineWidth = isWinner ? 2 : 1
+      ctx.stroke()
+
+      if (items.length <= 28 && sweep > 0.14) {
+        ctx.save()
+        ctx.translate(cx, cy)
+        ctx.rotate(angle + sweep / 2)
+        ctx.textAlign = 'right'
+        ctx.textBaseline = 'middle'
+        const size = Math.max(9, Math.min(14, radius * 0.075))
+        ctx.font = `${isWinner ? 600 : 400} ${size}px system-ui, sans-serif`
+        ctx.fillStyle = isWinner ? accent : label
+        const text = String(item.label)
+        const maxChars = Math.max(6, Math.floor(radius / (size * 0.52)) - 3)
+        ctx.fillText(
+          text.length > maxChars ? `${text.slice(0, maxChars - 1)}…` : text,
+          radius - 8,
+          0
+        )
+        ctx.restore()
+      }
+      angle += sweep
+    })
+  }
 
   ctx.beginPath()
   ctx.arc(cx, cy, Math.max(5, radius * 0.06), 0, TAU)
@@ -321,7 +319,7 @@ function drawWheel(canvas, items, rotation, winner, spinning, flapper) {
   ctx.fill()
   ctx.globalAlpha = 1
 
-  // ticker arm at the top, kicked by the rounds going past
+  // ticker arm at the top, kicked by the pegs going past
   ctx.save()
   ctx.translate(cx, 6)
   ctx.rotate(flapper)
@@ -334,8 +332,15 @@ function drawWheel(canvas, items, rotation, winner, spinning, flapper) {
   ctx.stroke()
   ctx.restore()
 
-  // readout: the round under the pointer right now
-  const under = indexAt(pointerFrac)
+  // Readout: the sector under the pointer right now.
+  const pointerFrac = (((-rotation / TAU) % 1) + 1) % 1
+  let under = 0
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (fracStart[index] <= pointerFrac) {
+      under = index
+      break
+    }
+  }
   const showing = winner !== null && !spinning ? winner : under
   const entry = items[showing]
   if (!entry) return

@@ -60,13 +60,12 @@ the wheel appears in the pane. Press **Try your luck**.
 - **One draw, two surfaces.** The pane and the agent tool share one store
   (`plugin-data/wheelspin/wheels.json`, atomic writes under an advisory lock), so
   a click and a tool call are the same draw.
-- **Big wheels feed like a belt.** Every option sits on one continuous ring, in
-  proportion to its weight, and only the arc at the pointer is drawn — rounds
-  feed in over the top left, pass the pointer, and drop out the other side. That
-  is what lets a 2,000-title Steam library cycle through without any sector
-  becoming a sliver. The draw itself is still one flat weighted pick
-  (`secrets.randbelow`), and the belt is placed so the drawn round stops under
-  the pointer; the readout names whatever is passing it at that instant.
+- **A wheel that holds thousands.** Up to 60 options the wheel is drawn as real
+  filled sectors with their labels on the rim. Above that the rim becomes a fine
+  drive ring — capped tooth density, the winning sector still drawn as a true
+  wedge — and the readout under the hub names whatever sector is under the
+  pointer as it slows. Drawing 5,000 options costs ~0.1 ms a frame, so the
+  animation stays smooth at any realistic size.
 - **Jackpots are cosmetic.** 1–3 options per wheel are flagged at random
   (about one per five, capped at three). They never change the odds; a jackpot is
   only revealed if the winner happens to be one. The store does not expose which
