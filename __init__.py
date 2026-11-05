@@ -12,12 +12,27 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from . import core, schemas
+from . import art, core, schemas
 from .tools import wheelspin_delete, wheelspin_list, wheelspin_load, wheelspin_spin
 
 logger = logging.getLogger(__name__)
 
 _ID = "wheelspin"
+
+
+def _slash_wheel(raw_args: str = "") -> str:
+    """`/wheel [name]` — draw and render the text wheel, no model turn involved."""
+    name = (raw_args or "").strip() or None
+    try:
+        store = core.WheelStore()
+        result = store.spin(name, count=1)
+        wheel = store.get(result["wheel_id"])
+    except core.WheelError as exc:
+        return f"wheel: {exc}"
+    except OSError as exc:
+        return f"wheel: could not read the store ({exc})"
+    payload = {**result, "items_detail": wheel["items"]}
+    return art.render_result(payload)
 
 
 def register(ctx: Any) -> None:
@@ -57,6 +72,14 @@ def register(ctx: Any) -> None:
             ctx.register_skill(_ID, skill_file)
         except Exception as exc:  # pragma: no cover - older Hermes without register_skill
             logger.debug("wheelspin: skill registration skipped: %s", exc)
+
+    # /wheel — draw and print the text wheel without spending a model turn.
+    ctx.register_command(
+        "wheel",
+        _slash_wheel,
+        description="Spin a loaded wheel and print it in the transcript",
+        args_hint="[wheel name]",
+    )
 
     logger.debug("wheelspin: registered 4 tools (store=%s)", _safe_store_root())
 

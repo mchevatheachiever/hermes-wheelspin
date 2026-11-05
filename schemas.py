@@ -5,9 +5,11 @@ LOAD = {
         "Load a list of options onto a visual spinning wheel in the Hermes Desktop app. "
         "Use this whenever the user wants to decide between things at random (what to eat, "
         "which game to play, who goes first, which task to pick up) or explicitly asks for "
-        "the wheel. The user then clicks SPIN in the Wheel pane, the wheel animates, and the "
-        "winning label is announced. Calling this tool does not pick a winner by itself. "
-        "If the user wants an instant answer without the animation, use wheelspin_spin instead."
+        "the wheel. The user then clicks TRY YOUR LUCK in the Wheel pane, the wheel animates, "
+        "and the winning label is announced. Calling this tool does not pick a winner by itself. "
+        "The result carries a `display` field: reproduce it verbatim in a fenced code block so "
+        "the wheel is visible in text-only surfaces. If the user wants an instant answer "
+        "without the animation, use wheelspin_spin instead."
     ),
     "parameters": {
         "type": "object",
@@ -51,9 +53,12 @@ LOAD = {
 SPIN = {
     "description": (
         "Draw an answer immediately from a loaded wheel, without the Desktop animation. "
-        "Returns the winning label(s) and their probabilities. Use when the user asks you to "
-        "just pick something, when the Desktop app is not in use (CLI, Discord, cron), or when "
-        "they want several draws in a row. If no wheel is loaded it picks from the items passed here."
+        "Returns the winning label(s) and their probabilities, plus a `display` field holding "
+        "the wheel already drawn in block characters. ALWAYS reproduce the `display` text "
+        "verbatim in your reply, in a fenced code block — that drawing is the only way the user "
+        "sees the wheel in the CLI, TUI, Discord or any gateway chat. Use this when the user asks "
+        "you to just pick something, when the Desktop app is not in use, or when they want "
+        "several draws in a row. If no wheel is loaded it picks from the items passed here."
     ),
     "parameters": {
         "type": "object",
