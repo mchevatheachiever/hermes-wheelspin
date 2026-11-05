@@ -187,6 +187,35 @@ function sectorGeometry(items, index) {
   return { start, sweep: (items[index].weight / total) * TAU }
 }
 
+/** Which sector sits under a wheel-space angle (radians from 12 o'clock, clockwise). */
+function sectorAt(items, theta) {
+  const total = items.reduce((sum, item) => sum + item.weight, 0) || 1
+  let acc = 0
+  for (let index = 0; index < items.length; index += 1) {
+    const sweep = (items[index].weight / total) * TAU
+    if (theta >= acc && theta < acc + sweep) return index
+    acc += sweep
+  }
+  return items.length - 1
+}
+
+/** Collapse a big wheel into belt cells, so the resting screen is readable too. */
+function topView(items, per = 8) {
+  let view = items.map((item) => ({ label: item.label, weight: item.weight }))
+  while (view.length > per) {
+    const next = []
+    for (let index = 0; index < view.length; index += per) {
+      const chunk = view.slice(index, index + per)
+      next.push({
+        label: `${next.length + 1}`,
+        weight: chunk.reduce((sum, entry) => sum + entry.weight, 0)
+      })
+    }
+    view = next
+  }
+  return view
+}
+
 /* -------------------------------------------------------------------------- */
 /* canvas wheel                                                              */
 /* -------------------------------------------------------------------------- */
@@ -297,6 +326,56 @@ function drawWheel(canvas, items, rotation, winner, spinning, flapper) {
   ctx.arc(pivotX, pivotY, 2.6, 0, TAU)
   ctx.fillStyle = accent
   ctx.fill()
+
+  // Live readout: the sector currently under the pointer, updating as it rolls.
+  const theta = (((-rotation % TAU) + TAU) % TAU)
+  const under = sectorAt(items, theta)
+  const showing = winner !== null && !spinning ? winner : under
+  const entry = items[showing]
+  if (!entry) return
+
+  const fontSize = Math.max(11, Math.min(15, width * 0.045))
+  ctx.font = `${spinning ? 500 : 700} ${fontSize}px system-ui, sans-serif`
+  const text = String(entry.label)
+  const maxWidth = width - 24
+  let measured = ctx.measureText(text).width
+  let clipped = text
+  if (measured > maxWidth) {
+    let cut = text
+    while (cut.length > 1 && ctx.measureText(`${cut}…`).width > maxWidth) {
+      cut = cut.slice(0, -1)
+    }
+    clipped = `${cut}…`
+    measured = ctx.measureText(clipped).width
+  }
+
+  const boxHeight = fontSize + 12
+  const boxWidth = Math.min(maxWidth, measured + 20)
+  const boxX = cx - boxWidth / 2
+  const boxY = height - boxHeight - 4
+
+  ctx.globalAlpha = 0.16
+  ctx.fillStyle = accent
+  if (typeof ctx.roundRect === 'function') {
+    ctx.beginPath()
+    ctx.roundRect(boxX, boxY, boxWidth, boxHeight, 7)
+    ctx.fill()
+  } else {
+    ctx.fillRect(boxX, boxY, boxWidth, boxHeight)
+  }
+  ctx.globalAlpha = 1
+  ctx.strokeStyle = stroke
+  ctx.lineWidth = 1
+  if (typeof ctx.roundRect === 'function') {
+    ctx.beginPath()
+    ctx.roundRect(boxX, boxY, boxWidth, boxHeight, 7)
+    ctx.stroke()
+  }
+
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillStyle = winner !== null && !spinning ? accent : label
+  ctx.fillText(clipped, cx, boxY + boxHeight / 2 + 0.5)
 }
 
 /* -------------------------------------------------------------------------- */
@@ -396,6 +475,7 @@ function WheelPane({ ctx }) {
   const [spinning, setSpinning] = useState(false)
   const [winner, setWinner] = useState(null)
   const [result, setResult] = useState('')
+  const [beltNote, setBeltNote] = useState('')
   const [sound, setSound] = useState(true)
   const [sendToChat, setSendToChat] = useState(true)
   const [draft, setDraft] = useState('')
@@ -436,9 +516,10 @@ function WheelPane({ ctx }) {
   }, [spinning, winner])
 
   useEffect(() => {
-    itemsRef.current = items
+    itemsRef.current = topView(items)
     setWinner(null)
     setResult('')
+    setBeltNote('')
     rotationRef.current = 0
     flapperRef.current = 0
     setTick((value) => value + 1)
@@ -528,6 +609,92 @@ function WheelPane({ ctx }) {
     slotTimers.current.push(setTimeout(() => setSlot(null), 4200))
   }, [])
 
+  // One stage = one belt-load of sectors, spun to the sector the backend drew.
+  const animateStage = useCallback(
+    (stage, soundKit) =>
+      new Promise((resolve) => {
+        const list = stage.labels.map((label, index) => ({
+          label,
+          weight: Math.max(1, Number(stage.weights[index]) || 1)
+        }))
+        if (!list.length) {
+          resolve()
+          return
+        }
+        itemsRef.current = list
+        setWinner(null)
+
+        // Solve for the exact stop angle, then for the ω0 that friction will carry there.
+        const { start, sweep } = sectorGeometry(list, stage.chosen)
+        const jitter = (Math.random() - 0.5) * sweep * 0.6
+        const from = rotationRef.current
+        const aligned = -start - sweep / 2 + jitter
+        const turns = MIN_TURNS + Math.random() * (MAX_TURNS - MIN_TURNS)
+        let to = aligned
+        while (to < from + TAU * turns) to += TAU
+        const distance = to - from
+
+        let omega = solveOmega0(distance)
+        const omegaPeak = omega
+        let last = performance.now()
+        let travelled = 0
+        let pegIndex = Math.floor(((from + TAU * 0.25) / TAU) * list.length)
+        let flapper = 0
+        let settleFrames = 0
+
+        const step = (now) => {
+          const dt = Math.min(0.05, Math.max(0.001, (now - last) / 1000))
+          last = now
+
+          // Integrate the friction model rather than sampling a curve.
+          const decel = K * omega + MU
+          const delta = Math.max(0, omega * dt - 0.5 * decel * dt * dt)
+          travelled += delta
+          omega = Math.max(0, omega - decel * dt)
+          rotationRef.current = from + travelled
+
+          // Ticker: kicked by each peg, sprung back to rest.
+          const targetFlap = -Math.min(0.42, (omega / Math.max(1, omegaPeak)) * 0.5)
+          flapper += (targetFlap - flapper) * Math.min(1, dt * 26)
+          flapperRef.current = flapper
+
+          const index = Math.floor((rotationRef.current / TAU) * list.length)
+          if (index !== pegIndex && omega > 0) {
+            pegIndex = index
+            if (soundKit) soundKit.tick(omega / Math.max(1, omegaPeak))
+          }
+
+          paint()
+
+          if (omega > 0.001 && travelled < distance) {
+            rafRef.current = requestAnimationFrame(step)
+            return
+          }
+
+          // Damped settle on the last few pixels, so it doesn't stop dead.
+          settleFrames += 1
+          const overshoot = distance - travelled
+          if (settleFrames < 14 && Math.abs(overshoot) > 0.0005) {
+            travelled += overshoot * 0.45
+            rotationRef.current = from + travelled
+            flapperRef.current = flapper * 0.55
+            flapper *= 0.55
+            paint()
+            rafRef.current = requestAnimationFrame(step)
+            return
+          }
+
+          rotationRef.current = from + distance
+          flapperRef.current = 0
+          paint()
+          resolve()
+        }
+
+        rafRef.current = requestAnimationFrame(step)
+      }),
+    [paint]
+  )
+
   const spin = useCallback(async () => {
     if (spinning || !wheel) return
     haptic('tap')
@@ -553,92 +720,50 @@ function WheelPane({ ctx }) {
     }
 
     const target = outcome.winners[0]
-    const list = itemsRef.current
-    if (!list.length) {
-      setSpinning(false)
-      return
+    // Big wheels arrive as a path: belts first, then the belt-load that holds
+    // the winner. Only the last two stages are worth animating — the earlier
+    // ones are belt selection, shown as a text chain instead of three spins.
+    const fullPath = Array.isArray(outcome.path) ? outcome.path : []
+    const skipped = fullPath.length > 2 ? fullPath.slice(0, -2) : []
+    if (skipped.length) {
+      setBeltNote(`belt ${skipped.map((stage) => stage.chosen + 1).join(" › ")} of ${outcome.belts}`)
+    }
+    const stages = fullPath.length
+      ? fullPath.slice(-2)
+      : [
+          {
+            labels: itemsRef.current.map((item) => item.label),
+            weights: itemsRef.current.map((item) => item.weight),
+            chosen: target.index
+          }
+        ]
+
+    for (let index = 0; index < stages.length; index += 1) {
+      if (index > 0) {
+        // the belt click-in: a beat between stages
+        setTick((value) => value + 1)
+        await new Promise((done) => setTimeout(done, 340))
+      }
+      await animateStage(stages[index], soundKit)
     }
 
-    // Solve for the exact stop angle, then for the ω0 that friction will carry there.
-    const { start, sweep } = sectorGeometry(list, target.index)
-    const jitter = (Math.random() - 0.5) * sweep * 0.6
-    const from = rotationRef.current
-    const aligned = -start - sweep / 2 + jitter
-    const turns = MIN_TURNS + Math.random() * (MAX_TURNS - MIN_TURNS)
-    let to = aligned
-    while (to < from + TAU * turns) to += TAU
-    const distance = to - from
-
-    let omega = solveOmega0(distance)
-    const omegaPeak = omega
-    const blip = soundKit
-
-    let last = performance.now()
-    let travelled = 0
-    let pegIndex = Math.floor(((from + TAU * 0.25) / TAU) * list.length)
-    let flapper = 0
-    let settleFrames = 0
-
-    const step = (now) => {
-      const dt = Math.min(0.05, Math.max(0.001, (now - last) / 1000))
-      last = now
-
-      // Integrate the friction model rather than sampling a curve.
-      const decel = K * omega + MU
-      const delta = Math.max(0, omega * dt - 0.5 * decel * dt * dt)
-      travelled += delta
-      omega = Math.max(0, omega - decel * dt)
-      rotationRef.current = from + travelled
-
-      // Ticker: kicked by each peg, sprung back to rest.
-      const targetFlap = -Math.min(0.42, omega / Math.max(1, omegaPeak) * 0.5)
-      flapper += (targetFlap - flapper) * Math.min(1, dt * (spinning ? 26 : 14))
-      flapperRef.current = flapper
-
-      const index = Math.floor((rotationRef.current / TAU) * list.length)
-      if (index !== pegIndex && omega > 0) {
-        pegIndex = index
-        if (blip) blip.tick(omega / Math.max(1, omegaPeak))
-      }
-
-      paint()
-
-      if (omega > 0.001 && travelled < distance) {
-        rafRef.current = requestAnimationFrame(step)
-        return
-      }
-
-      // Damped settle on the last few pixels, so it doesn't stop dead.
-      settleFrames += 1
-      const overshoot = distance - travelled
-      if (settleFrames < 14 && Math.abs(overshoot) > 0.0005) {
-        travelled += overshoot * 0.45
-        rotationRef.current = from + travelled
-        flapperRef.current = flapper * 0.55
-        flapper *= 0.55
-        paint()
-        rafRef.current = requestAnimationFrame(step)
-        return
-      }
-
-      rotationRef.current = from + distance
-      flapperRef.current = 0
-      setSpinning(false)
-      setWinner(target.index)
-      setResult(target.label)
-      setTick((value) => value + 1)
-      haptic('tap')
-
-      if (outcome.jackpot) {
-        fireJackpot(target.label, soundKit)
-        announce(`JACKPOT!!! ${target.label}`)
-      } else {
-        announce(target.label)
-      }
+    const finalStage = stages[stages.length - 1]
+    setSpinning(false)
+    setWinner(finalStage.chosen)
+    setResult(target.label)
+    if (skipped.length) {
+      setBeltNote(`belt ${fullPath.map((stage) => stage.chosen + 1).join(" › ")} of ${outcome.belts}`)
     }
+    setTick((value) => value + 1)
+    haptic('tap')
 
-    rafRef.current = requestAnimationFrame(step)
-  }, [announce, ctx, fireJackpot, paint, sound, spinning, wheel, itemsKey])
+    if (outcome.jackpot) {
+      fireJackpot(target.label, soundKit)
+      announce(`JACKPOT!!! ${target.label}`)
+    } else {
+      announce(target.label)
+    }
+  }, [announce, animateStage, ctx, fireJackpot, sound, spinning, wheel, itemsKey])
 
   useEffect(() => {
     spinRequest = spin
@@ -677,6 +802,12 @@ function WheelPane({ ctx }) {
         className: 'flex items-center justify-between gap-2',
         children: [
           jsx('span', { className: 'truncate font-medium', children: wheel ? wheel.name : 'wheel' }),
+          wheel && wheel.items.length > 8
+            ? jsx('span', {
+                className: 'shrink-0 text-[0.625rem] text-(--ui-text-quaternary)',
+                children: `${wheel.items.length} · ${Math.ceil(wheel.items.length / 8)} belts`
+              })
+            : null,
           jsxs('div', {
             className: 'flex items-center gap-1',
             children: [
@@ -808,6 +939,13 @@ function WheelPane({ ctx }) {
             className: 'truncate text-center font-medium',
             style: { color: 'var(--ui-accent)' },
             children: `★ ${result}`
+          })
+        : null,
+
+      beltNote
+        ? jsx('div', {
+            className: 'truncate text-center text-[0.625rem] text-(--ui-text-quaternary)',
+            children: beltNote
           })
         : null,
 

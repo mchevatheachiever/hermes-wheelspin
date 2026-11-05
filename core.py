@@ -26,13 +26,14 @@ except ImportError:  # pragma: no cover - Windows
     fcntl = None  # type: ignore[assignment]
 
 SCHEMA_VERSION = 1
-MAX_ITEMS = 512
+MAX_ITEMS = 2000
 MAX_LABEL_CHARS = 120
 MAX_WEIGHT = 1000
 MAX_HISTORY = 200
 MAX_NAME_CHARS = 60
 MAX_JACKPOTS = 3
 JACKPOT_SHARE = 0.2  # roughly one hidden jackpot per five options
+MAX_SECTORS = 8  # largest wheel that is still readable on screen
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 _CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
@@ -188,6 +189,69 @@ def _clean_jackpots(raw: Any, item_count: int) -> list[int]:
         return choose_jackpots(item_count)
     values = sorted({int(v) for v in raw if isinstance(v, (int, float)) and 0 <= int(v) < item_count})
     return values[:MAX_JACKPOTS]
+
+
+# --------------------------------------------------------------------------- #
+# magazines — big wheels feed in belts, like an LMG
+# --------------------------------------------------------------------------- #
+
+
+def magazines(items: Sequence[dict[str, Any]], per: int = MAX_SECTORS) -> list[list[dict[str, Any]]]:
+    """Split a wheel into belt-loads of at most ``per`` sectors, order preserved."""
+    if per < 2:
+        per = 2
+    return [list(items[start : start + per]) for start in range(0, len(items), per)]
+
+
+def draw_hierarchical(
+    items: Sequence[dict[str, Any]],
+    rng: Any = None,
+    per: int = MAX_SECTORS,
+) -> dict[str, Any]:
+    """Draw one winner, feeding through magazines as needed.
+
+    Picking a magazine by its total weight and then an item inside it by weight is
+    an identity, not an approximation::
+
+        P(item) = (W_magazine / W_all) * (w_item / W_magazine) = w_item / W_all
+
+    so a 300-option wheel draws exactly as one flat weighted draw would, while
+    never putting more than ``per`` sectors on screen at once.
+    """
+    if not items:
+        raise WheelError("cannot spin an empty wheel")
+
+    if len(items) <= per:
+        index = draw_index(items, rng)
+        return {
+            "index": index,
+            "depth": 1,
+            "path": [
+                {
+                    "kind": "items",
+                    "labels": [item["label"] for item in items],
+                    "weights": [int(item["weight"]) for item in items],
+                    "chosen": index,
+                }
+            ],
+        }
+
+    belts = magazines(items, per)
+    belt_items = [
+        {"label": f"belt {number + 1}", "weight": total_weight(belt)}
+        for number, belt in enumerate(belts)
+    ]
+    # Stage one: pick the belt. Recursive, so a 2000-option wheel still never
+    # puts more than `per` belts on screen at any level.
+    belt_draw = draw_hierarchical(belt_items, rng, per)
+    belt_index = belt_draw["index"]
+    inner = draw_hierarchical(belts[belt_index], rng, per)
+    offset = sum(len(belt) for belt in belts[:belt_index])
+    path = [
+        *belt_draw["path"],
+        *inner["path"],
+    ]
+    return {"index": offset + inner["index"], "depth": belt_draw["depth"] + inner["depth"], "path": path}
 
 
 # --------------------------------------------------------------------------- #
@@ -366,7 +430,8 @@ class WheelStore:
     def spin(self, name: str | None = None, count: int = 1) -> dict[str, Any]:
         count = max(1, min(10, int(count)))
         wheel = self.get(name)
-        winners = [draw_index(wheel["items"]) for _ in range(count)]
+        draws = [draw_hierarchical(wheel["items"]) for _ in range(count)]
+        winners = [draw["index"] for draw in draws]
         now = time.time()
         records = [
             {
@@ -391,6 +456,9 @@ class WheelStore:
             "wheel_id": wheel["id"],
             "items": len(wheel["items"]),
             "jackpot": bool(winners and winners[0] in wheel["jackpots"]),
+            "belts": len(magazines(wheel["items"])) if len(wheel["items"]) > MAX_SECTORS else 1,
+            # The UI replays this: one entry per stage, last entry holds the winner.
+            "path": draws[0]["path"],
             "winners": [
                 {
                     "label": wheel["items"][index]["label"],

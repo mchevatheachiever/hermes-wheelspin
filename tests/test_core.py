@@ -137,6 +137,68 @@ class JackpotTest(unittest.TestCase):
         self.assertAlmostEqual(draws.count(0) / len(draws), 0.75, delta=0.02)
 
 
+class MagazineTest(unittest.TestCase):
+    def test_splits_into_belts_of_eight(self):
+        items = core.normalise_items([f"i{n}" for n in range(50)])
+        belts = core.magazines(items)
+        self.assertEqual(len(belts), 7)
+        self.assertTrue(all(len(belt) <= core.MAX_SECTORS for belt in belts))
+        self.assertEqual(sum(len(belt) for belt in belts), 50)
+
+    def test_small_wheel_has_one_stage(self):
+        items = core.normalise_items(["a", "b", "c"])
+        draw = core.draw_hierarchical(items, random.Random(1))
+        self.assertEqual(len(draw["path"]), 1)
+        self.assertEqual(draw["depth"], 1)
+
+    def test_big_wheel_feeds_through_belts(self):
+        items = core.normalise_items([f"i{n}" for n in range(30)])
+        draw = core.draw_hierarchical(items, random.Random(2))
+        self.assertEqual(len(draw["path"]), 2)
+        # stage one picks a belt, stage two picks inside that belt-load
+        self.assertTrue(all(label.startswith("belt ") for label in draw["path"][0]["labels"]))
+        self.assertTrue(all(label.startswith("i") for label in draw["path"][1]["labels"]))
+        self.assertLessEqual(len(draw["path"][1]["labels"]), core.MAX_SECTORS)
+        self.assertEqual(
+            draw["path"][1]["labels"][draw["path"][1]["chosen"]], items[draw["index"]]["label"]
+        )
+
+    def test_deep_wheels_stay_under_eight_sectors_per_stage(self):
+        items = core.normalise_items([f"i{n}" for n in range(1500)])
+        draw = core.draw_hierarchical(items, random.Random(4))
+        self.assertGreaterEqual(len(draw["path"]), 3)
+        for stage in draw["path"]:
+            self.assertLessEqual(len(stage["labels"]), core.MAX_SECTORS)
+        self.assertEqual(
+            draw["path"][-1]["labels"][draw["path"][-1]["chosen"]], items[draw["index"]]["label"]
+        )
+
+    def test_odds_match_one_flat_draw(self):
+        """Magazine feeding must not distort the weights by even a fraction."""
+        items = core.normalise_items(
+            [{"label": f"i{n}", "weight": (n % 5) + 1} for n in range(50)]
+        )
+        rng = random.Random(11)
+        counts = [0] * len(items)
+        rounds = 40000
+        for _ in range(rounds):
+            counts[core.draw_hierarchical(items, rng)["index"]] += 1
+        total = sum(item["weight"] for item in items)
+        for index, item in enumerate(items):
+            self.assertAlmostEqual(counts[index] / rounds, item["weight"] / total, delta=0.012)
+
+    def test_weighted_belts_are_picked_proportionally(self):
+        # One heavy item in belt 1 should pull belt 1 far more often than belt 2.
+        items = core.normalise_items(
+            [{"label": "whale", "weight": 900}] + [f"i{n}" for n in range(15)]
+        )
+        rng = random.Random(3)
+        first_belt = sum(
+            1 for _ in range(2000) if core.draw_hierarchical(items, rng)["path"][0]["chosen"] == 0
+        )
+        self.assertGreater(first_belt / 2000, 0.75)
+
+
 class StoreTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -177,10 +239,10 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(len(history), 3)
         self.assertEqual(history[-1]["wheel"], "d")
 
-    def test_spin_probabilities_sum_to_one(self):
+    def test_spin_probabilities_match_the_weights(self):
         self.store.upsert("d", [{"label": "a", "weight": 3}, {"label": "b", "weight": 1}])
-        result = self.store.spin("d")
-        self.assertEqual(result["winners"][0]["probability"], 0.75)
+        winner = self.store.spin("d")["winners"][0]
+        self.assertEqual(winner["probability"], 0.75 if winner["label"] == "a" else 0.25)
 
     def test_delete_removes_and_moves_active(self):
         self.store.upsert("a", ["x", "y"])

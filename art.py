@@ -133,17 +133,30 @@ def render_art(
 def render_result(spin: dict[str, Any]) -> str:
     """Full text block for one spin result: art + headline."""
     wheel_items = spin.get("items_detail") or []
+    path = spin.get("path") or []
     winner = spin["winners"][0]
     is_jackpot = bool(spin.get("jackpot"))
+
+    # Big wheels feed through belts; the last stage holds the sector that won.
+    stage = path[-1] if path else None
+    if stage:
+        shown = [
+            {"label": label, "weight": weight}
+            for label, weight in zip(stage["labels"], stage["weights"])
+        ]
+        stage_index = stage["chosen"]
+    else:
+        shown = wheel_items
+        stage_index = winner["index"]
+
+    belts = int(spin.get("belts") or 1)
+    title = f"wheel: {spin['wheel']}"
+    if belts > 1 and path:
+        chain = " › ".join(str(stage["chosen"] + 1) for stage in path[:-1])
+        title += f" — belt {chain} of {belts}"
+
     art_text = (
-        render_art(
-            wheel_items,
-            winner["index"],
-            title=f"wheel: {spin['wheel']}",
-            jackpot=is_jackpot,
-        )
-        if wheel_items
-        else ""
+        render_art(shown, stage_index, title=title, jackpot=is_jackpot) if shown else ""
     )
     if len(spin["winners"]) > 1:
         headline = "★ The wheel says: " + ", ".join(w["label"] for w in spin["winners"])
