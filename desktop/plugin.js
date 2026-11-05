@@ -797,6 +797,25 @@ function WheelPane({ ctx }) {
         : null,
 
       jsx('div', {
+        className: 'flex min-h-[68px] w-full shrink-0 items-center justify-center px-1',
+        children: result
+          ? jsx('div', {
+              style: {
+                color: 'var(--ui-accent)',
+                fontSize: '27px',
+                lineHeight: 1.12,
+                fontWeight: 800,
+                textAlign: 'center',
+                letterSpacing: '-0.01em',
+                overflowWrap: 'anywhere',
+                textShadow: '0 0 20px color-mix(in oklab, var(--ui-accent) 55%, transparent)'
+              },
+              children: result
+            })
+          : null
+      }),
+
+      jsx('div', {
         className: 'flex w-full shrink-0 items-center justify-center py-1',
         children: jsx('button', {
           type: 'button',
@@ -829,14 +848,6 @@ function WheelPane({ ctx }) {
           children: spinning ? 'Good luck…' : 'Try Your Luck!'
         })
       }),
-
-      result
-        ? jsx('div', {
-            className: 'truncate text-center font-medium',
-            style: { color: 'var(--ui-accent)' },
-            children: `★ ${result}`
-          })
-        : null,
 
       error
         ? jsx('div', {
