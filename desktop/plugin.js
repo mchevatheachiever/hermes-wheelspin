@@ -529,7 +529,6 @@ function WheelPane({ ctx }) {
     itemsRef.current = items.map((item) => ({ label: item.label, weight: item.weight }))
     setWinner(null)
     setResult('')
-    setBeltNote('')
     rotationRef.current = 0
     flapperRef.current = 0
     setTick((value) => value + 1)
