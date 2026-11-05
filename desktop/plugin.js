@@ -798,17 +798,24 @@ function WheelPane({ ctx }) {
         : null,
 
       jsx('div', {
-        className: 'flex min-h-[116px] w-full shrink-0 items-center justify-center px-1',
+        className: 'flex w-full shrink-0 items-center justify-center overflow-hidden px-1',
+        style: { height: '124px' },
         children: result
           ? jsx('div', {
               style: {
                 color: 'var(--ui-accent)',
-                fontSize: '52px',
+                fontSize:
+                  result.length > 26 ? '34px' : result.length > 17 ? '42px' : '52px',
                 lineHeight: 1.05,
                 fontWeight: 800,
                 textAlign: 'center',
                 letterSpacing: '-0.01em',
                 overflowWrap: 'anywhere',
+                maxHeight: '100%',
+                display: '-webkit-box',
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: 'vertical',
+                overflow: 'hidden',
                 textShadow: '0 0 20px color-mix(in oklab, var(--ui-accent) 55%, transparent)'
               },
               children: result
