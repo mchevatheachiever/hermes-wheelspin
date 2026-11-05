@@ -19,7 +19,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 const ID = 'wheelspin'
 const TAU = Math.PI * 2
 const SLOT_SYMBOLS = ['7', '★', '◆', 'BAR', '♪', '$']
-const DENSE_THRESHOLD = 60 // above this the rim is drawn as a drive ring
 
 // The palette row needs to reach the mounted pane's spin handler. Module scope
 // is the plugin's own; nothing outside the plugin reads it.
@@ -83,15 +82,15 @@ function makeBlip() {
       const osc = ctx.createOscillator()
       const gain = ctx.createGain()
       osc.type = 'square'
-      osc.frequency.value = 620 + Math.random() * 90
+      osc.frequency.value = 300 + Math.random() * 140
       const now = ctx.currentTime
-      const peak = 0.012 + 0.016 * Math.max(0, Math.min(1, gainScale))
+      const peak = 0.022 + 0.028 * Math.max(0, Math.min(1, gainScale))
       gain.gain.setValueAtTime(peak, now)
-      gain.gain.exponentialRampToValueAtTime(0.0004, now + 0.022)
+      gain.gain.exponentialRampToValueAtTime(0.0006, now + 0.03)
       osc.connect(gain)
       gain.connect(ctx.destination)
       osc.start(now)
-      osc.stop(now + 0.026)
+      osc.stop(now + 0.035)
     } catch {
       /* audio is garnish — never break the spin */
     }
@@ -102,14 +101,15 @@ function makeBlip() {
     try {
       const ctx = context()
       if (!ctx) return
+      noise(ctx, 0.13, 0.16, 1800)
       const now = ctx.currentTime
       const osc = ctx.createOscillator()
       const gain = ctx.createGain()
       osc.type = 'sine'
       osc.frequency.setValueAtTime(190, now)
-      osc.frequency.exponentialRampToValueAtTime(76, now + 0.14)
-      gain.gain.setValueAtTime(0.16, now)
-      gain.gain.exponentialRampToValueAtTime(0.0008, now + 0.18)
+      osc.frequency.exponentialRampToValueAtTime(72, now + 0.16)
+      gain.gain.setValueAtTime(0.18, now)
+      gain.gain.exponentialRampToValueAtTime(0.0008, now + 0.2)
       osc.connect(gain)
       gain.connect(ctx.destination)
       osc.start(now)
@@ -214,175 +214,90 @@ function drawWheel(canvas, items, rotation, winner, spinning, flapper) {
 
   const cx = width / 2
   const cy = height / 2
-  const radius = Math.min(cx, cy) - 20
+  const radius = Math.min(cx, cy) - 18
   const total = items.reduce((sum, item) => sum + item.weight, 0) || 1
-  const dense = items.length > DENSE_THRESHOLD
+  const showLabels = items.length <= 28
 
-  // Where each sector starts, as a fraction of the whole wheel.
-  const fracStart = new Float64Array(items.length)
-  let acc = 0
-  for (let index = 0; index < items.length; index += 1) {
-    fracStart[index] = acc / total
-    acc += items[index].weight
-  }
+  let angle = rotation - Math.PI / 2
+  items.forEach((item, index) => {
+    const sweep = (item.weight / total) * TAU
+    const isWinner = winner === index && !spinning
 
-  const angleOf = (fraction) => (fraction + rotation / TAU) * TAU - Math.PI / 2
-
-  if (dense) {
-    // Thousands of sectors cannot be filled individually at this size, so the
-    // rim becomes a fine drive ring: teeth at a capped density, the winning
-    // sector still drawn as a real wedge, and the readout naming the round
-    // under the pointer.
     ctx.beginPath()
-    ctx.arc(cx, cy, radius, 0, TAU)
+    ctx.moveTo(cx, cy)
+    ctx.arc(cx, cy, radius, angle, angle + sweep)
+    ctx.closePath()
+    ctx.globalAlpha = isWinner ? 0.95 : 0.13 + 0.09 * (index % 3)
     ctx.fillStyle = accent
-    ctx.globalAlpha = 0.05
     ctx.fill()
     ctx.globalAlpha = 1
     ctx.strokeStyle = stroke
-    ctx.lineWidth = 1
+    ctx.lineWidth = isWinner ? 2 : 1
     ctx.stroke()
 
-    const teeth = Math.min(items.length, 360)
-    const step = Math.max(1, Math.floor(items.length / teeth))
-    ctx.strokeStyle = stroke
-    ctx.lineWidth = 1
-    ctx.globalAlpha = 0.45
-    for (let index = 0; index < items.length; index += step) {
-      const angle = angleOf(fracStart[index])
-      const cos = Math.cos(angle)
-      const sin = Math.sin(angle)
-      ctx.beginPath()
-      ctx.moveTo(cx + cos * (radius - 5), cy + sin * (radius - 5))
-      ctx.lineTo(cx + cos * radius, cy + sin * radius)
-      ctx.stroke()
+    if (showLabels && sweep > 0.14) {
+      ctx.save()
+      ctx.translate(cx, cy)
+      ctx.rotate(angle + sweep / 2)
+      ctx.textAlign = 'right'
+      ctx.textBaseline = 'middle'
+      const size = Math.max(9, Math.min(14, radius * 0.075))
+      ctx.font = `${isWinner ? 600 : 400} ${size}px system-ui, sans-serif`
+      ctx.fillStyle = isWinner ? accent : label
+      const text = String(item.label)
+      const maxChars = Math.max(6, Math.floor(radius / (size * 0.52)) - 3)
+      ctx.fillText(
+        text.length > maxChars ? `${text.slice(0, maxChars - 1)}…` : text,
+        radius - 8,
+        0
+      )
+      ctx.restore()
     }
+    angle += sweep
+  })
+
+  // pegs on the rim — one per sector boundary, these are what the ticker hits
+  items.forEach((item, index) => {
+    const { start } = sectorGeometry(items, index)
+    const pegAngle = rotation - Math.PI / 2 + start
+    const px = cx + Math.cos(pegAngle) * (radius - 2)
+    const py = cy + Math.sin(pegAngle) * (radius - 2)
+    ctx.beginPath()
+    ctx.arc(px, py, 2.2, 0, TAU)
+    ctx.globalAlpha = 0.55
+    ctx.fillStyle = stroke
+    ctx.fill()
     ctx.globalAlpha = 1
+  })
 
-    if (winner !== null && winner < items.length) {
-      const from = angleOf(fracStart[winner])
-      const sweep = (items[winner].weight / total) * TAU
-      ctx.beginPath()
-      ctx.moveTo(cx, cy)
-      ctx.arc(cx, cy, radius, from, from + Math.max(sweep, 0.012))
-      ctx.closePath()
-      ctx.globalAlpha = spinning ? 0.35 : 0.9
-      ctx.fillStyle = accent
-      ctx.fill()
-      ctx.globalAlpha = 1
-    }
-  } else {
-    let angle = rotation - Math.PI / 2
-    items.forEach((item, index) => {
-      const sweep = (item.weight / total) * TAU
-      const isWinner = winner === index && !spinning
-
-      ctx.beginPath()
-      ctx.moveTo(cx, cy)
-      ctx.arc(cx, cy, radius, angle, angle + sweep)
-      ctx.closePath()
-      ctx.globalAlpha = isWinner ? 0.95 : 0.13 + 0.09 * (index % 3)
-      ctx.fillStyle = accent
-      ctx.fill()
-      ctx.globalAlpha = 1
-      ctx.strokeStyle = stroke
-      ctx.lineWidth = isWinner ? 2 : 1
-      ctx.stroke()
-
-      if (items.length <= 28 && sweep > 0.14) {
-        ctx.save()
-        ctx.translate(cx, cy)
-        ctx.rotate(angle + sweep / 2)
-        ctx.textAlign = 'right'
-        ctx.textBaseline = 'middle'
-        const size = Math.max(9, Math.min(14, radius * 0.075))
-        ctx.font = `${isWinner ? 600 : 400} ${size}px system-ui, sans-serif`
-        ctx.fillStyle = isWinner ? accent : label
-        const text = String(item.label)
-        const maxChars = Math.max(6, Math.floor(radius / (size * 0.52)) - 3)
-        ctx.fillText(
-          text.length > maxChars ? `${text.slice(0, maxChars - 1)}…` : text,
-          radius - 8,
-          0
-        )
-        ctx.restore()
-      }
-      angle += sweep
-    })
-  }
-
+  // hub
   ctx.beginPath()
-  ctx.arc(cx, cy, Math.max(5, radius * 0.06), 0, TAU)
-  ctx.globalAlpha = 0.8
+  ctx.arc(cx, cy, Math.max(6, radius * 0.075), 0, TAU)
+  ctx.globalAlpha = 0.85
   ctx.fillStyle = accent
   ctx.fill()
   ctx.globalAlpha = 1
 
-  // ticker arm at the top, kicked by the pegs going past
+  // ticker arm pivoting at the top, deflected by the pegs
+  const pivotX = cx
+  const pivotY = 6
   ctx.save()
-  ctx.translate(cx, 6)
+  ctx.translate(pivotX, pivotY)
   ctx.rotate(flapper)
   ctx.beginPath()
   ctx.moveTo(0, 0)
-  ctx.lineTo(0, 15)
+  ctx.lineTo(0, 16)
   ctx.lineWidth = 3
   ctx.lineCap = 'round'
   ctx.strokeStyle = accent
   ctx.stroke()
   ctx.restore()
 
-  // Readout: the sector under the pointer right now.
-  const pointerFrac = (((-rotation / TAU) % 1) + 1) % 1
-  let under = 0
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    if (fracStart[index] <= pointerFrac) {
-      under = index
-      break
-    }
-  }
-  const showing = winner !== null && !spinning ? winner : under
-  const entry = items[showing]
-  if (!entry) return
-
-  const fontSize = Math.max(11, Math.min(15, width * 0.045))
-  ctx.font = `${spinning ? 500 : 700} ${fontSize}px system-ui, sans-serif`
-  const text = String(entry.label)
-  const maxWidth = width - 24
-  let clipped = text
-  if (ctx.measureText(text).width > maxWidth) {
-    let cut = text
-    while (cut.length > 1 && ctx.measureText(`${cut}…`).width > maxWidth) cut = cut.slice(0, -1)
-    clipped = `${cut}…`
-  }
-  const measured = ctx.measureText(clipped).width
-  const boxHeight = fontSize + 12
-  const boxWidth = Math.min(maxWidth, measured + 20)
-  const boxX = cx - boxWidth / 2
-  const boxY = height - boxHeight - 4
-
-  ctx.globalAlpha = 0.16
+  ctx.beginPath()
+  ctx.arc(pivotX, pivotY, 2.6, 0, TAU)
   ctx.fillStyle = accent
-  if (typeof ctx.roundRect === 'function') {
-    ctx.beginPath()
-    ctx.roundRect(boxX, boxY, boxWidth, boxHeight, 7)
-    ctx.fill()
-  } else {
-    ctx.fillRect(boxX, boxY, boxWidth, boxHeight)
-  }
-  ctx.globalAlpha = 1
-  ctx.strokeStyle = stroke
-  ctx.lineWidth = 1
-  if (typeof ctx.roundRect === 'function') {
-    ctx.beginPath()
-    ctx.roundRect(boxX, boxY, boxWidth, boxHeight, 7)
-    ctx.stroke()
-  }
-  ctx.textAlign = 'center'
-  ctx.textBaseline = 'middle'
-  ctx.fillStyle = winner !== null && !spinning ? accent : label
-  ctx.fillText(clipped, cx, boxY + boxHeight / 2 + 0.5)
+  ctx.fill()
 }
-
 
 /* -------------------------------------------------------------------------- */
 /* jackpot reveal — three reels, then the banner                             */
@@ -508,8 +423,7 @@ function WheelPane({ ctx }) {
   const itemsKey = wheel ? `${wheel.id}:${wheel.updated_at}` : 'none'
 
   const paint = useCallback(() => {
-    if (!canvasRef.current) return
-    try {
+    if (canvasRef.current) {
       drawWheel(
         canvasRef.current,
         itemsRef.current,
@@ -518,14 +432,11 @@ function WheelPane({ ctx }) {
         spinning,
         flapperRef.current
       )
-    } catch (err) {
-      // A draw error must never take the pane down; surface it instead.
-      setError(`draw: ${err && err.message ? err.message : err}`)
     }
   }, [spinning, winner])
 
   useEffect(() => {
-    itemsRef.current = items.map((item) => ({ label: item.label, weight: item.weight }))
+    itemsRef.current = items
     setWinner(null)
     setResult('')
     rotationRef.current = 0
@@ -617,137 +528,6 @@ function WheelPane({ ctx }) {
     slotTimers.current.push(setTimeout(() => setSlot(null), 4200))
   }, [])
 
-  // One stage = one belt-load of sectors, spun to the sector the backend drew.
-  const animateStage = useCallback(
-    (stage, soundKit) =>
-      new Promise((resolve) => {
-        const list = stage.labels.map((label, index) => ({
-          label,
-          weight: Math.max(1, Number(stage.weights[index]) || 1)
-        }))
-        if (!list.length) {
-          resolve()
-          return
-        }
-        itemsRef.current = list
-        setWinner(null)
-
-        // Solve for the exact stop angle, then for the ω0 that friction will carry there.
-        const { start, sweep } = sectorGeometry(list, stage.chosen)
-        const jitter = (Math.random() - 0.5) * sweep * 0.6
-        const from = rotationRef.current
-        const aligned = -start - sweep / 2 + jitter
-        const turns = MIN_TURNS + Math.random() * (MAX_TURNS - MIN_TURNS)
-        let to = aligned
-        while (to < from + TAU * turns) to += TAU
-        const distance = to - from
-
-        let omega = solveOmega0(distance)
-        const omegaPeak = omega
-        let last = performance.now()
-        let travelled = 0
-        let pegIndex = Math.floor(((from + TAU * 0.25) / TAU) * list.length)
-        let flapper = 0
-        let settleFrames = 0
-        let finished = false
-
-        // Watchdog: if rAF never fires (window occluded, GPU stall), the spin
-        // must still end instead of leaving the pane stuck on "spinning…".
-        const finish = () => {
-          if (finished) return
-          finished = true
-          clearTimeout(hardStop)
-          rotationRef.current = from + distance
-          flapperRef.current = 0
-          try {
-            paint()
-          } catch {
-            /* paint already reports its own errors */
-          }
-          resolve()
-        }
-        const hardStop = setTimeout(finish, 9000)
-
-        const step = (now) => {
-          const dt = Math.min(0.05, Math.max(0.001, (now - last) / 1000))
-          last = now
-
-          // Integrate the friction model rather than sampling a curve.
-          const decel = K * omega + MU
-          const delta = Math.max(0, omega * dt - 0.5 * decel * dt * dt)
-          travelled += delta
-          omega = Math.max(0, omega - decel * dt)
-          rotationRef.current = from + travelled
-
-          // Ticker: kicked by each peg, sprung back to rest.
-          const targetFlap = -Math.min(0.42, (omega / Math.max(1, omegaPeak)) * 0.5)
-          flapper += (targetFlap - flapper) * Math.min(1, dt * 26)
-          flapperRef.current = flapper
-
-          const index = Math.floor((rotationRef.current / TAU) * list.length)
-          // Throttle by time, not by index: a 2000-round belt would otherwise
-          // machine-gun the ticker at frame rate.
-          if (index !== pegIndex && omega > 0 && now - lastTick > 55) {
-            pegIndex = index
-            lastTick = now
-            if (soundKit) soundKit.tick(omega / Math.max(1, omegaPeak))
-          }
-
-          paint()
-
-          if (omega > 0.001 && travelled < distance) {
-            rafRef.current = requestAnimationFrame(step)
-            return
-          }
-
-          // Damped settle on the last few pixels, so it doesn't stop dead.
-          settleFrames += 1
-          const overshoot = distance - travelled
-          if (settleFrames < 14 && Math.abs(overshoot) > 0.0005) {
-            travelled += overshoot * 0.45
-            rotationRef.current = from + travelled
-            flapperRef.current = flapper * 0.55
-            flapper *= 0.55
-            paint()
-            rafRef.current = requestAnimationFrame(step)
-            return
-          }
-
-          rotationRef.current = from + distance
-          flapperRef.current = 0
-          paint()
-          finish()
-        }
-
-        rafRef.current = requestAnimationFrame(step)
-      }),
-    [paint]
-  )
-
-  const runStages = useCallback(
-    async (outcome, target, soundKit) => {
-      // One continuous feed: the belt carries every option past the pointer, so
-      // thousands cycle through without any of them becoming a sliver.
-      const labels = items.map((item) => item.label)
-      const weights = items.map((item) => item.weight)
-      await animateStage({ labels, weights, chosen: target.index }, soundKit)
-
-      setSpinning(false)
-      setWinner(target.index)
-      setResult(target.label)
-      setTick((value) => value + 1)
-      haptic('tap')
-
-      if (outcome.jackpot) {
-        fireJackpot(target.label, soundKit)
-        announce(`JACKPOT!!! ${target.label}`)
-      } else {
-        announce(target.label)
-      }
-    },
-    [announce, animateStage, fireJackpot, items]
-  )
-
   const spin = useCallback(async () => {
     if (spinning || !wheel) return
     haptic('tap')
@@ -760,20 +540,105 @@ function WheelPane({ ctx }) {
     const soundKit = sound ? makeBlip() : null
     if (soundKit) soundKit.press()
 
+    let outcome
     try {
-      const outcome = await ctx.rest(`/wheels/${encodeURIComponent(wheel.id)}/spin`, {
+      outcome = await ctx.rest(`/wheels/${encodeURIComponent(wheel.id)}/spin`, {
         method: 'POST',
         body: { count: 1 }
       })
-      if (!outcome || !Array.isArray(outcome.winners) || !outcome.winners.length) {
-        throw new Error('no winner in the spin response')
-      }
-      await runStages(outcome, outcome.winners[0], soundKit)
     } catch (err) {
       setSpinning(false)
-      setError(`spin: ${err && err.message ? err.message : String(err)}`)
+      setError(`spin failed: ${err && err.message ? err.message : err}`)
+      return
     }
-  }, [ctx, runStages, sound, spinning, wheel])
+
+    const target = outcome.winners[0]
+    const list = itemsRef.current
+    if (!list.length) {
+      setSpinning(false)
+      return
+    }
+
+    // Solve for the exact stop angle, then for the ω0 that friction will carry there.
+    const { start, sweep } = sectorGeometry(list, target.index)
+    const jitter = (Math.random() - 0.5) * sweep * 0.6
+    const from = rotationRef.current
+    const aligned = -start - sweep / 2 + jitter
+    const turns = MIN_TURNS + Math.random() * (MAX_TURNS - MIN_TURNS)
+    let to = aligned
+    while (to < from + TAU * turns) to += TAU
+    const distance = to - from
+
+    let omega = solveOmega0(distance)
+    const omegaPeak = omega
+    const blip = soundKit
+
+    let last = performance.now()
+    let travelled = 0
+    let pegIndex = Math.floor(((from + TAU * 0.25) / TAU) * list.length)
+    let flapper = 0
+    let settleFrames = 0
+
+    const step = (now) => {
+      const dt = Math.min(0.05, Math.max(0.001, (now - last) / 1000))
+      last = now
+
+      // Integrate the friction model rather than sampling a curve.
+      const decel = K * omega + MU
+      const delta = Math.max(0, omega * dt - 0.5 * decel * dt * dt)
+      travelled += delta
+      omega = Math.max(0, omega - decel * dt)
+      rotationRef.current = from + travelled
+
+      // Ticker: kicked by each peg, sprung back to rest.
+      const targetFlap = -Math.min(0.42, omega / Math.max(1, omegaPeak) * 0.5)
+      flapper += (targetFlap - flapper) * Math.min(1, dt * (spinning ? 26 : 14))
+      flapperRef.current = flapper
+
+      const index = Math.floor((rotationRef.current / TAU) * list.length)
+      if (index !== pegIndex && omega > 0) {
+        pegIndex = index
+        if (blip) blip.tick(omega / Math.max(1, omegaPeak))
+      }
+
+      paint()
+
+      if (omega > 0.001 && travelled < distance) {
+        rafRef.current = requestAnimationFrame(step)
+        return
+      }
+
+      // Damped settle on the last few pixels, so it doesn't stop dead.
+      settleFrames += 1
+      const overshoot = distance - travelled
+      if (settleFrames < 14 && Math.abs(overshoot) > 0.0005) {
+        travelled += overshoot * 0.45
+        rotationRef.current = from + travelled
+        flapperRef.current = flapper * 0.55
+        flapper *= 0.55
+        paint()
+        rafRef.current = requestAnimationFrame(step)
+        return
+      }
+
+      rotationRef.current = from + distance
+      flapperRef.current = 0
+      setSpinning(false)
+      setWinner(target.index)
+      setResult(target.label)
+      setTick((value) => value + 1)
+      haptic('tap')
+
+      if (outcome.jackpot) {
+        fireJackpot(target.label, soundKit)
+        announce(`JACKPOT!!! ${target.label}`)
+      } else {
+        announce(target.label)
+      }
+    }
+
+    rafRef.current = requestAnimationFrame(step)
+  }, [announce, ctx, fireJackpot, paint, sound, spinning, wheel, itemsKey])
 
   useEffect(() => {
     spinRequest = spin
@@ -806,18 +671,12 @@ function WheelPane({ ctx }) {
 
   return jsxs('div', {
     ref: shellRef,
-    className: 'flex h-full min-h-0 flex-col gap-1.5 overflow-hidden p-2 text-sm',
+    className: 'flex h-full min-h-0 flex-col gap-2 p-2 text-sm',
     children: [
       jsxs('div', {
         className: 'flex items-center justify-between gap-2',
         children: [
           jsx('span', { className: 'truncate font-medium', children: wheel ? wheel.name : 'wheel' }),
-          wheel && wheel.items.length > 8
-            ? jsx('span', {
-                className: 'shrink-0 text-[0.625rem] text-(--ui-text-quaternary)',
-                children: `${wheel.items.length} on the belt`
-              })
-            : null,
           jsxs('div', {
             className: 'flex items-center gap-1',
             children: [
@@ -872,7 +731,7 @@ function WheelPane({ ctx }) {
         : null,
 
       jsx('div', {
-        className: 'relative min-h-0 flex-1 overflow-hidden',
+        className: 'relative min-h-[190px] flex-1',
         children: jsxs('div', {
           className: 'flex h-full min-h-0 items-center justify-center',
           children: [
@@ -952,7 +811,6 @@ function WheelPane({ ctx }) {
           })
         : null,
 
-
       error
         ? jsx('div', {
             className: 'truncate text-center text-[0.6875rem]',
@@ -979,7 +837,7 @@ export default {
       id: 'pane',
       area: 'panes',
       title: 'wheel',
-      data: { placement: 'right', width: '320px', height: '420px' },
+      data: { placement: 'right', width: '300px' },
       render: () => jsx(WheelPane, { ctx })
     })
 
