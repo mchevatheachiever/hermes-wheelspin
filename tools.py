@@ -30,7 +30,7 @@ def _pane_hint(wheel: dict[str, Any]) -> str:
     tickets = f"{count} options" if total == count else f"{count} options ({total} tickets)"
     return (
         f"{tickets} are on the wheel '{wheel['name']}'. "
-        "Open the Wheel pane in Hermes Desktop and press SPIN."
+        "Open the Wheel pane in Hermes Desktop and press Try your luck."
     )
 
 
