@@ -16,6 +16,8 @@ import sys
 from pathlib import Path
 
 DECL = re.compile(r"const\s*\[\s*\w+\s*,\s*(set[A-Z]\w*)\s*\]\s*=\s*useState")
+# A setter may also be a useCallback wrapper (persisting a preference, etc.).
+DECL_CB = re.compile(r"const\s+(set[A-Z]\w*)\s*=\s*useCallback")
 CALL = re.compile(r"\b(set[A-Z]\w*)\s*\(")
 
 # Browser/DOM/WebAudio APIs that merely share the setX shape.
@@ -28,7 +30,7 @@ GLOBALS = {
 
 def check(path: Path) -> list[str]:
     source = path.read_text(encoding="utf-8")
-    declared = set(DECL.findall(source))
+    declared = set(DECL.findall(source)) | set(DECL_CB.findall(source))
     problems = []
     for name in sorted(set(CALL.findall(source)) - declared - GLOBALS):
         # A setter may legitimately come from somewhere else (props/context);
