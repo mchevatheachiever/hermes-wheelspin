@@ -74,6 +74,48 @@ def check_hooks(path: Path) -> list[str]:
     return problems
 
 
+
+AREA_USE = re.compile(r"area:\s*([A-Z][A-Z0-9_]+)")
+IDENT_DECL = re.compile(r"(?:const|let|var|function)\s+([A-Z][A-Z0-9_]*)")
+
+
+def check_sdk_constants(path: Path) -> list[str]:
+    """`area: SOME_CONSTANT` must resolve — an unimported one throws inside register().
+
+    That throw happens *after* earlier registrations have landed, so the plugin
+    half-works: the pane appears and the palette command silently never does.
+    """
+    source = path.read_text(encoding="utf-8")
+    imported = set()
+    for pattern in (REACT_IMPORT, SDK_IMPORT):
+        for match in pattern.finditer(source):
+            for name in match.group(1).split(","):
+                imported.add(name.split(" as ")[-1].strip())
+    declared = set(IDENT_DECL.findall(source))
+    problems = []
+    for name in sorted(set(AREA_USE.findall(source))):
+        if name in imported or name in declared:
+            continue
+        line = next((n for n, text in enumerate(source.splitlines(), 1) if f"area: {name}" in text), 0)
+        problems.append(f"{path}:{line}: area: {name} is not imported or declared")
+    return problems
+
+
+
+QUOTED_CONST = re.compile(r"area:\s*'([A-Z][A-Z0-9_]*)'")
+
+
+def check_quoted_areas(path: Path) -> list[str]:
+    """`area: 'SOME_CONSTANT'` is a string, not the constant — it silently lands
+    in an area nobody reads, so the contribution just never appears."""
+    source = path.read_text(encoding="utf-8")
+    return [
+        f"{path}:{n}: area: '{name}' is a string literal — pass the constant"
+        for n, text in enumerate(source.splitlines(), 1)
+        for name in QUOTED_CONST.findall(text)
+    ]
+
+
 def main() -> int:
     targets = [Path(arg) for arg in sys.argv[1:]] or [Path("desktop/plugin.js")]
     problems: list[str] = []
@@ -81,6 +123,8 @@ def main() -> int:
         if target.exists():
             problems.extend(check(target))
             problems.extend(check_hooks(target))
+            problems.extend(check_sdk_constants(target))
+            problems.extend(check_quoted_areas(target))
     for problem in problems:
         print(problem)
     return 1 if problems else 0

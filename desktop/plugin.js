@@ -12,7 +12,7 @@
  * Only @hermes/plugin-sdk, react and react/jsx-runtime resolve.
  */
 
-import { Button, cn, haptic, host, useQuery } from '@hermes/plugin-sdk'
+import { Button, cn, haptic, host, PALETTE_AREA, useQuery } from '@hermes/plugin-sdk'
 import { jsx, jsxs } from 'react/jsx-runtime'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
@@ -890,7 +890,7 @@ export default {
 
     ctx.register({
       id: 'spin-command',
-      area: 'PALETTE_AREA',
+      area: PALETTE_AREA,
       data: {
         id: `${ID}.spin`,
         label: 'WheelSpin: try your luck',
