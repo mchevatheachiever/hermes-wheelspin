@@ -120,11 +120,19 @@ hermes plugins validate . --install-deps             # catalog admission gate
 `useState` was deleted: that is valid syntax, and it only throws when the pane
 mounts — which is exactly how this plugin shipped a "failed to render" once.
 
-The API tests need FastAPI (the Hermes runtime venv has it):
+The API tests need FastAPI. Any interpreter that has it will do — the Hermes
+runtime venv ships with it:
 
 ```bash
-"$HERMES_VENV/bin/python" -m unittest tests.test_api
+python -c "import fastapi" || pip install fastapi httpx
+cd tests && python -m unittest test_api
 ```
+
+## Surfaces
+
+The Desktop pane shows a **wheel**. Text-only surfaces (chat, CLI, Discord) show a
+different thing: a strip of **one belt of at most 8 rows**, with the winner marked —
+a wheel cannot be drawn in text, and a list of 300 lines is not a display.
 
 ## License
 

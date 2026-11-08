@@ -81,7 +81,6 @@ def wheelspin_spin(args: dict, **kwargs: Any) -> str:
     payload = {
         "success": True,
         **result,
-        "items_detail": wheel["items"],
     }
     payload["display"] = art.render_result(payload)
     payload["answer"] = payload["winners"][0]["label"] if len(payload["winners"]) == 1 else [

@@ -184,6 +184,15 @@ def choose_jackpots(item_count: int, rng: Any = None) -> list[int]:
     return sorted(chosen)
 
 
+def _as_float(value: Any, default: float = 0.0) -> float:
+    """Coerce a stored timestamp. A bad value must not raise out of read()."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return number or default
+
+
 def _clean_jackpots(raw: Any, item_count: int) -> list[int]:
     if not isinstance(raw, list):
         return choose_jackpots(item_count)
@@ -323,8 +332,8 @@ class WheelStore:
             "items": items,
             "jackpots": _clean_jackpots(wheel.get("jackpots"), len(items)),
             "source": str(wheel.get("source") or "")[:200],
-            "created_at": float(wheel.get("created_at") or 0) or time.time(),
-            "updated_at": float(wheel.get("updated_at") or 0) or time.time(),
+            "created_at": _as_float(wheel.get("created_at"), time.time()),
+            "updated_at": _as_float(wheel.get("updated_at"), time.time()),
         }
 
     def write(self, state: dict[str, Any]) -> None:

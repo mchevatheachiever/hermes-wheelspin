@@ -309,7 +309,7 @@ function drawReel(canvas, items, offset, winner, spinning) {
 
   const shell = readVar(canvas, '--ui-bg-secondary', '#151a17')
   const panel = readVar(canvas, '--ui-bg-primary', '#0e1210')
-  const line = readVar(canvas, '--ui-border', '#2b3a31')
+  const line = readVar(canvas, '--ui-stroke-secondary', '#2b3a31')
   const accent = readVar(canvas, '--ui-accent', '#6fbf8b')
   const text = readVar(canvas, '--ui-text-secondary', '#c8d5cc')
 
@@ -689,7 +689,7 @@ function JackpotOverlay({ slot }) {
                   children: 'JACKPOT!!!'
                 }),
                 jsx('div', {
-                  className: 'max-w-[190px] truncate text-center text-[0.6875rem]',
+                  className: 'max-w-48 truncate text-center text-[0.6875rem]',
                   style: { color: 'var(--ui-text-secondary)' },
                   children: slot.label
                 })
@@ -1091,6 +1091,7 @@ function WheelPane({ ctx }) {
       await ctx.rest('/wheels', { method: 'POST', body: { name: 'pasted', items: lines } })
       setDraft('')
       setEditing(false)
+      setError('')
       haptic('tap')
       await wheelsQuery.refetch()
     } catch (err) {
@@ -1125,7 +1126,7 @@ function WheelPane({ ctx }) {
                 variant: 'ghost',
                 onClick: () => chooseMode('wheel'),
                 title: 'Show the spinning wheel',
-                className: reelView ? undefined : 'bg-(--chrome-action-active) text-foreground',
+                variant: reelView ? 'ghost' : 'secondary',
                 children: '🎡'
               }),
               jsx(Button, {
@@ -1133,7 +1134,7 @@ function WheelPane({ ctx }) {
                 variant: 'ghost',
                 onClick: () => chooseMode('reel'),
                 title: 'Show the tape reel',
-                className: reelView ? 'bg-(--chrome-action-active) text-foreground' : undefined,
+                variant: reelView ? 'secondary' : 'ghost',
                 children: '🎰'
               }),
               jsx(Button, {
@@ -1164,7 +1165,7 @@ function WheelPane({ ctx }) {
 
       chips.length > 1
         ? jsx('div', {
-            className: 'flex max-h-[5.5rem] flex-wrap gap-1 overflow-y-auto',
+            className: 'flex max-h-24 flex-wrap gap-1 overflow-y-auto',
             children: chips.map((entry) =>
               jsx(
                 'button',
@@ -1175,7 +1176,7 @@ function WheelPane({ ctx }) {
                   className: cn(
                     'truncate rounded px-1.5 py-0.5 text-[0.6875rem] transition-colors',
                     entry.id === (wheel && wheel.id)
-                      ? 'bg-(--chrome-action-active) text-foreground'
+                      ? 'bg-(--ui-bg-quaternary) font-medium text-(--ui-text-primary)'
                       : 'text-(--ui-text-tertiary) hover:bg-(--chrome-action-hover)'
                   ),
                   children: `${entry.name} (${entry.items.length})`
@@ -1234,7 +1235,7 @@ function WheelPane({ ctx }) {
                 children: [
                   jsx(Button, {
                     size: 'xs',
-                    variant: 'primary',
+                    variant: 'default',
                     onClick: loadDraft,
                     disabled: !draft.trim(),
                     children: 'Load'
@@ -1536,13 +1537,21 @@ export default {
             return
           }
           if (!open()) return
-          requestAnimationFrame(() => {
+          // The pane mounts a frame or two later, so its spin handler is not
+          // attached yet on the first attempt. Wait ~400ms before saying so.
+          const startedAt = performance.now()
+          const trySpin = () => {
             if (typeof spinRequest === 'function') {
               spinRequest()
-            } else {
-              host.notify({ kind: 'info', message: 'Wheel pane is open — press Try your luck.' })
+              return
             }
-          })
+            if (performance.now() - startedAt < 400) {
+              requestAnimationFrame(trySpin)
+              return
+            }
+            host.notify({ kind: 'info', message: 'Wheel pane is open — press Try your luck.' })
+          }
+          requestAnimationFrame(trySpin)
         }
       }
     })

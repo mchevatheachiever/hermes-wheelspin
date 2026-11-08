@@ -205,6 +205,42 @@ class MagazineTest(unittest.TestCase):
         self.assertGreater(first_belt / 2000, 0.75)
 
 
+class BadTimestampTest(unittest.TestCase):
+    """A hand-edited or half-written timestamp must not raise out of read()."""
+
+    def setUp(self):
+        import tempfile
+        self.root = Path(tempfile.mkdtemp()) / "wheelspin"
+
+    def test_read_survives_a_non_numeric_timestamp(self):
+        self.root.mkdir(parents=True, exist_ok=True)
+        (self.root / "wheels.json").write_text(
+            json.dumps(
+                {
+                    "wheels": {
+                        "broken": {
+                            "id": "broken",
+                            "name": "broken",
+                            "items": [{"label": "one", "weight": 1}, {"label": "two", "weight": 1}],
+                            "created_at": "yesterday",
+                            "updated_at": None,
+                        }
+                    },
+                    "active": "broken",
+                    "history": [],
+                    "order": ["broken"],
+                }
+            ),
+            encoding="utf-8",
+        )
+        store = core.WheelStore(self.root)
+        state = store.read()
+        self.assertIn("broken", state["wheels"])
+        wheel = store.get("broken")
+        self.assertEqual(len(wheel["items"]), 2)
+        self.assertGreater(wheel["created_at"], 0)
+
+
 class StoreTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

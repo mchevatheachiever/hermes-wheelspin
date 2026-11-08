@@ -40,14 +40,12 @@ function extract(name) {
 
 // The constants the functions close over are module-level in the plugin.
 const TAU = Math.PI * 2
-const LABEL_MIN_ARC = 13
-const REEL_MIN_CELLS = 6
+const REEL_MIN_CELLS = Number((source.match(/const REEL_MIN_CELLS = (\d+)/) || [])[1] || 6)
 const sandbox = new Function(
   'TAU',
-  'LABEL_MIN_ARC',
   'REEL_MIN_CELLS',
   `${extract('reelTarget')}\n${extract('easeOutQuint')}\n${extract('wrapLines')}\n${extract('bannerFontSize')}\nreturn {  reelTarget, easeOutQuint, wrapLines, bannerFontSize }`
-)(TAU, LABEL_MIN_ARC, REEL_MIN_CELLS)
+)(TAU, REEL_MIN_CELLS)
 
 const { reelTarget, easeOutQuint, wrapLines, bannerFontSize } = sandbox
 

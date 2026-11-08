@@ -22,7 +22,12 @@ PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _load_core() -> Any:
-    """Import core.py by path — plugin_api is loaded outside the plugin package."""
+    """Import core.py by path.
+
+    Deliberate, not a workaround to be tidied away: the dashboard loads this
+    module outside the plugin package, so a relative import cannot resolve. The
+    module is cached under a fixed name so repeated calls reuse one instance.
+    """
     existing = sys.modules.get("wheelspin_core")
     if existing is not None:
         return existing
@@ -93,7 +98,11 @@ async def upsert_wheel(payload: WheelPayload) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"wheel store unwritable: {exc}") from exc
-    return {"ok": True, "wheel": wheel, **_state()}
+    # The store's write path answers with the wheel as written, jackpots
+    # included. The pane redraws from the next GET anyway, so say what changed
+    # without repeating the one thing the tools are supposed to keep quiet.
+    public = {k: v for k, v in wheel.items() if k != "jackpots"}
+    return {"ok": True, "wheel": public, **_state()}
 
 
 @router.post("/wheels/{wheel_id}/spin")
@@ -121,7 +130,12 @@ async def delete_wheel(wheel_id: str) -> dict[str, Any]:
 
 @router.get("/health")
 async def health() -> dict[str, Any]:
-    """Cheap probe the pane uses to tell 'no wheels' from 'no backend'."""
+    """Cheap probe: can the store be read and serialised?
+
+    Not used by the pane — it reports failures through the error row instead.
+    Kept for scripts and monitors that want a single unauthenticated-shaped
+    health answer.
+    """
     try:
         state = _store().read()
         json.dumps(state["wheels"], default=str)

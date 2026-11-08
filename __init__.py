@@ -31,7 +31,7 @@ def _slash_wheel(raw_args: str = "") -> str:
         return f"wheel: {exc}"
     except OSError as exc:
         return f"wheel: could not read the store ({exc})"
-    payload = {**result, "items_detail": wheel["items"]}
+    payload = {**result}
     return art.render_result(payload)
 
 

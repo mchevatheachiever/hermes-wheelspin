@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.2.1 — 2026-11-08
+
+Review fixes (issue #1).
+
+### Fixed
+- **A bad stored timestamp 500'd every route.** `float()` on `created_at` raised
+  `ValueError` straight out of `read()`. `_as_float()` now coerces, defaulting to
+  the current time — a read path must never raise on user data. Test writes
+  `"created_at": "yesterday"` and proves `read()` still returns the wheel.
+- **The spin payload was 59KB for 1,000 items.** `items_detail` carried every item
+  and nothing read it once `path` was set (58,903 → 995 bytes).
+- **The POST response repeated which slots are jackpots.** Stripped; the pane
+  redraws from the next GET anyway.
+- **`variant: 'primary'` is not a Button variant in this build** — `default`.
+- **Uncompiled class tokens** on the mode buttons and active chip: variants and
+  `bg-(--ui-bg-quaternary)` instead, both of which core compiles.
+- **`--ui-border` isn't a token here**; `--ui-stroke-secondary` is.
+- **A stale error survived a successful paste** — `setError('')` on the success path.
+- **Palette spin gave up too early**: the pane mounts a frame or two after
+  `openWorkspace`, so the handler wasn't attached. Retries for ~400ms.
+- **The text legend truncated with no marker** — now ellipsised.
+
+### Docs
+- Real interpreter instructions for the API tests, the `/health` docstring no
+  longer claims the pane calls it, and a **Surfaces** note that the text wheel is
+  one belt of at most 8 rows.
+
 ## 1.2.0 — 2026-11-08
 
 ### Changed
