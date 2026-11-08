@@ -1,5 +1,45 @@
 # Changelog
 
+## 1.2.0 — 2026-11-08
+
+### Changed
+- **Auto never switches displays.** A dense wheel stays a wheel, the way the
+  streamers' tool does it — labels shrink and truncate rather than the display
+  changing shape under you. The reel is opt-in (🎰), and the "too many to label"
+  offer row is gone with it.
+- **Label size follows the slice, not the wheel**: `clamp(6, 20, radius × 0.062,
+  arc × 0.30)`. A sector's arc is the room its label actually has, so a 30-item
+  wheel on a wide pane gets big type and a 300-item one stays small.
+- **Truncation is geometric**: text stops at the drawn hub or where the slice
+  becomes narrower than the text is tall, whichever comes first — not at a fixed
+  character count. The old 16-character cap is gone.
+- **Greased friction**: K 5.2 → 0.35, MU 0.62 → 0.55. A spin now runs 2–3.4
+  turns over ~5–6 seconds with a long slow tail, instead of stopping dead.
+- **Every wheel is reachable from the pane.** The chip strip was `slice(0, 6)`,
+  so any wheel past the sixth was invisible rather than off-screen. All wheels are
+  listed, active first, in a strip that scrolls.
+
+### Fixed
+- **The landing didn't respect the pointer.** ±30% of a sector of landing jitter
+  put the winner visibly beside the top marker; now ±8%.
+- **The jerky finish.** The friction integral could travel past the target, and
+  the settle step then pulled it backwards. The step is clamped to the remaining
+  distance, so the wheel only ever approaches the target.
+- **Labels vanished on long items.** The draw was `if (measured <= room) fillText`
+  — with 120-character items that check always failed, so those wheels drew no
+  labels at all. It shrinks and truncates now.
+- **Rim seam**: sectors overlap by 0.002 rad and the rim is stroked once over the
+  finished wheel, so the join where the last sector closes on the first is gone.
+- **Stray fragments**: the wheel body is clipped to its rim circle.
+
+### Noted, not fixed
+- Faint trailing "ghost" text at 240Hz that does **not** appear in screenshots —
+  it is in the compositor or the panel's response time, not the rendered bitmap.
+
+### Tests
+- `tests/display.test.mjs` — 14 cases. The four fit-rule tests were removed with
+  `labelsFit`/`maxWheelItems`, which the pane no longer consults.
+
 ## 1.1.0 — 2026-11-08
 
 ### Added

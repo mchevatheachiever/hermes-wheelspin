@@ -46,32 +46,19 @@ const sandbox = new Function(
   'TAU',
   'LABEL_MIN_ARC',
   'REEL_MIN_CELLS',
-  `${extract('labelsFit')}\n${extract('reelTarget')}\n${extract('easeOutQuint')}\n${extract('wrapLines')}\n${extract('bannerFontSize')}\nreturn { labelsFit, reelTarget, easeOutQuint, wrapLines, bannerFontSize }`
+  `${extract('reelTarget')}\n${extract('easeOutQuint')}\n${extract('wrapLines')}\n${extract('bannerFontSize')}\nreturn {  reelTarget, easeOutQuint, wrapLines, bannerFontSize }`
 )(TAU, LABEL_MIN_ARC, REEL_MIN_CELLS)
 
-const { labelsFit, reelTarget, easeOutQuint, wrapLines, bannerFontSize } = sandbox
+const { reelTarget, easeOutQuint, wrapLines, bannerFontSize } = sandbox
 
 const items = (n, weight = 1) => Array.from({ length: n }, (_, i) => ({ label: `item ${i}`, weight }))
 
-test('a small wheel can be labelled', () => {
-  assert.equal(labelsFit(items(6), 200), true)
-  assert.equal(labelsFit(items(20), 200), true)
-})
-
-test('a dense wheel cannot', () => {
-  assert.equal(labelsFit(items(100), 200), false)
-  assert.equal(labelsFit(items(666), 300), false)
-})
-
-test('one starved sector is enough to fail the fit', () => {
-  const mixed = [...items(5), { label: 'tiny', weight: 0.001 }]
-  assert.equal(labelsFit(mixed, 220), false)
-})
-
-test('no radius or no items is not a fit', () => {
-  assert.equal(labelsFit(items(4), 0), false)
-  assert.equal(labelsFit([], 300), false)
-})
+// unused helper kept out:
+const _unused = (n) =>
+  Array.from({ length: n }, (_, i) => ({
+    label: `Blessed are they that mourn in the wilderness, for they shall be comforted, item ${i}`,
+    weight: 1
+  }))
 
 test('reelTarget always moves forward by at least the minimum run', () => {
   const cell = 176

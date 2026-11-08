@@ -46,8 +46,8 @@ function useIsPaneOpen() {
 }
 
 // Friction model: dω/dt = -K·ω - MU   (viscous + Coulomb)
-const K = 5.2 // 1/s, viscous drag (air + hub)
-const MU = 0.62 // rad/s², bearing friction (constant)
+const K = 0.35 // 1/s, viscous drag — greased: the old 5.2 stopped it dead
+const MU = 0.55 // rad/s², bearing friction (constant)
 const MIN_TURNS = 2
 const MAX_TURNS = 3.4
 const MAX_SIM_SECONDS = 14
@@ -215,15 +215,7 @@ function sectorGeometry(items, index) {
 // ── display mode: sectors vs reel ────────────────────────────────────────────
 // A sector can only carry a label if its arc is wide enough for one. Past that
 // the wheel is either bare (the user's choice) or it becomes a tape.
-const LABEL_MIN_ARC = 13
 const REEL_MIN_CELLS = 6
-
-/** True when every sector has room for a label at this radius. */
-function labelsFit(items, radius) {
-  if (!items.length || !(radius > 0)) return false
-  const total = items.reduce((sum, item) => sum + (item.weight || 1), 0) || 1
-  return items.every((item) => ((item.weight || 1) / total) * TAU * radius >= LABEL_MIN_ARC)
-}
 
 /**
  * Where the tape must end so `index` sits under the needle, having travelled at
@@ -404,12 +396,35 @@ function drawReel(canvas, items, offset, winner, spinning) {
     ctx.textBaseline = 'middle'
     const lines = wrapLines(label, winW - 36, maxLines, (piece) => ctx.measureText(piece).width)
     const block = lines.length * lineHeight
+
+    // Cylinder illusion: a row far from the middle of the window is curving
+    // away from us, so it reads narrower. Squash horizontally about the centre.
+    const fromCentre = Math.min(1, Math.abs(y - cy) / (winH / 2))
+    const squash = Math.max(0.62, Math.cos(fromCentre * (Math.PI / 2.6)))
+    ctx.save()
+    ctx.translate(cx, 0)
+    ctx.scale(squash, 1)
+    ctx.translate(-cx, 0)
+
     let lineY = y - block / 2 + lineHeight / 2
     for (const piece of lines) {
       ctx.fillText(piece, cx, lineY)
       lineY += lineHeight
     }
+    ctx.restore()
   }
+
+  // Shade the drum so it curves away at the top and bottom edges, with a soft
+  // highlight across the band you read against.
+  const drum = ctx.createLinearGradient(0, winY, 0, winY + winH)
+  drum.addColorStop(0, 'rgba(0,0,0,0.62)')
+  drum.addColorStop(0.18, 'rgba(0,0,0,0.10)')
+  drum.addColorStop(0.45, 'rgba(255,255,255,0.05)')
+  drum.addColorStop(0.55, 'rgba(255,255,255,0.05)')
+  drum.addColorStop(0.82, 'rgba(0,0,0,0.10)')
+  drum.addColorStop(1, 'rgba(0,0,0,0.62)')
+  ctx.fillStyle = drum
+  ctx.fillRect(winX, winY, winW, winH)
 
   // The needle: the line you are reading against.
   ctx.strokeStyle = accent
@@ -464,6 +479,14 @@ function drawWheel(canvas, items, rotation, winner, spinning, flapper) {
   const radius = Math.min(cx, cy) - 18
   const total = items.reduce((sum, item) => sum + item.weight, 0) || 1
 
+  // Everything the wheel body draws — sectors, labels, pegs — is clipped to the
+  // rim circle. A stray fragment outside the rim is otherwise possible from a
+  // label anchored on the sector that wraps the seam.
+  ctx.save()
+  ctx.beginPath()
+  ctx.arc(cx, cy, radius + 1, 0, TAU)
+  ctx.clip()
+
   let angle = rotation - Math.PI / 2
   items.forEach((item, index) => {
     const sweep = (item.weight / total) * TAU
@@ -471,7 +494,11 @@ function drawWheel(canvas, items, rotation, winner, spinning, flapper) {
 
     ctx.beginPath()
     ctx.moveTo(cx, cy)
-    ctx.arc(cx, cy, radius, angle, angle + sweep)
+    // A hair of overlap: adjacent arcs that meet exactly leave an anti-aliased
+    // seam where the last sector closes on the first, which shows as a thin
+    // bright line at the rim (most visible at the bottom, where the curve is
+    // flattest).
+    ctx.arc(cx, cy, radius, angle, angle + sweep + 0.002)
     ctx.closePath()
     ctx.globalAlpha = isWinner ? 0.95 : 0.13 + 0.09 * (index % 3)
     ctx.fillStyle = accent
@@ -498,19 +525,60 @@ function drawWheel(canvas, items, rotation, winner, spinning, flapper) {
       ctx.rotate(flipped ? mid + Math.PI : mid)
       ctx.textAlign = flipped ? 'left' : 'right'
       ctx.textBaseline = 'middle'
-      const size = Math.max(7, Math.min(14, radius * 0.075, arc * 0.62))
-      ctx.font = `${isWinner ? 600 : 400} ${size}px system-ui, sans-serif`
-      ctx.fillStyle = isWinner ? accent : label
       const text = String(item.label).toUpperCase()
-      const room = radius - 10
-      const maxChars = Math.max(3, Math.floor(room / (size * 0.52)))
-      const shown = text.length > maxChars ? `${text.slice(0, maxChars - 1)}…` : text
+      // Size first: the collision limits below both depend on it.
+      // Size follows the SLICE, not the wheel: a sector's arc is the room its
+      // label actually has, so a 30-item wheel on a wide pane gets big type and
+      // a 300-item one stays small. Capped by the wheel so a 6-item wheel does
+      // not end up shouting.
+      let size = Math.max(6, Math.min(20, radius * 0.062, arc * 0.3))
+
+      // The inner limit is where the text would actually collide, in either
+      // direction: the drawn hub, or the point at which this slice is only as
+      // wide as the text is tall (below that glyphs cross the slice edges).
+      const hubR = Math.max(6, radius * 0.075)
+      const sliceR = size / Math.max(sweep, 1e-6)
+      const innerR = Math.min(radius - 24, Math.max(hubR + 6, sliceR))
+      const room = radius - 8 - innerR
       const x = flipped ? -(radius - 8) : radius - 8
-      if (ctx.measureText(shown).width <= room) ctx.fillText(shown, x, 0)
+
+      let shown = ''
+      let guard = 0
+      for (; guard < 22; guard += 1) {
+        ctx.font = `${isWinner ? 600 : 400} ${size}px system-ui, sans-serif`
+        const maxChars = Math.max(3, Math.floor(room / (size * 0.52)))
+        shown = text.length > maxChars ? `${text.slice(0, maxChars - 1)}…` : text
+        if (ctx.measureText(shown).width <= room) break
+        if (size <= 6) break
+        size -= 1
+      }
+
+      // Belt and braces: nothing may spill past the inner edge.
+      ctx.beginPath()
+      if (flipped) {
+        ctx.rect(-(radius - 8), -size, radius - 8 - innerR, size * 2)
+      } else {
+        ctx.rect(innerR, -size, radius - 8 - innerR, size * 2)
+      }
+      ctx.clip()
+      ctx.fillStyle = isWinner ? accent : label
+      if (shown) ctx.fillText(shown, x, 0)
       ctx.restore()
     }
     angle += sweep
   })
+
+  ctx.restore()
+
+  // The rim, drawn once. Whatever the sector edges did underneath, this is the
+  // line a person sees.
+  ctx.beginPath()
+  ctx.arc(cx, cy, radius, 0, TAU)
+  ctx.strokeStyle = stroke
+  ctx.lineWidth = 1
+  ctx.globalAlpha = 0.9
+  ctx.stroke()
+  ctx.globalAlpha = 1
 
   // pegs on the rim — one per sector boundary, these are what the ticker hits
   items.forEach((item, index) => {
@@ -686,9 +754,10 @@ function WheelPane({ ctx }) {
   // button ride up and down as answers arrive.
   const slotHeight = Math.round(Math.max(96, Math.min(168, (shellH || 620) * 0.26)))
   const radius = box.w > 0 && box.h > 0 ? Math.min(box.w, box.h) / 2 - 18 : 0
-  const fits = radius > 0 ? labelsFit(items, radius) : true
-  // 'auto' means: label it if the sectors can carry labels, otherwise the tape.
-  const reelView = items.length > 0 && (mode === 'reel' || (mode === 'auto' && !fits))
+  // 'auto' always means the wheel: a dense wheel is still a wheel, the way the
+  // streamers' tool does it — labels shrink and truncate rather than the display
+  // changing shape under you. The reel is something you ask for.
+  const reelView = items.length > 0 && mode === 'reel'
   const reelViewRef = useRef(reelView)
   reelViewRef.current = reelView
 
@@ -889,7 +958,9 @@ function WheelPane({ ctx }) {
 
     // Solve for the exact stop angle, then for the ω0 that friction will carry there.
     const { start, sweep } = sectorGeometry(list, target.index)
-    const jitter = (Math.random() - 0.5) * sweep * 0.6
+    // A hair off centre at most. The old ±30% of a sector meant a 6-item wheel
+    // stopped with the winner visibly beside the pointer, not under it.
+    const jitter = (Math.random() - 0.5) * sweep * 0.16
     const from = rotationRef.current
     const aligned = -start - sweep / 2 + jitter
     const turns = MIN_TURNS + Math.random() * (MAX_TURNS - MIN_TURNS)
@@ -905,7 +976,6 @@ function WheelPane({ ctx }) {
     let travelled = 0
     let pegIndex = Math.floor(((from + TAU * 0.25) / TAU) * list.length)
     let flapper = 0
-    let settleFrames = 0
 
     const step = (now) => {
       const dt = Math.min(0.05, Math.max(0.001, (now - last) / 1000))
@@ -913,9 +983,12 @@ function WheelPane({ ctx }) {
 
       // Integrate the friction model rather than sampling a curve.
       const decel = K * omega + MU
-      const delta = Math.max(0, omega * dt - 0.5 * decel * dt * dt)
+      const wanted = Math.max(0, omega * dt - 0.5 * decel * dt * dt)
+      // Clamp to what is left. Overshooting the target was what made the last
+      // frames run backwards — the "jerky" finish.
+      const delta = Math.min(wanted, Math.max(0, distance - travelled))
       travelled += delta
-      omega = Math.max(0, omega - decel * dt)
+      omega = delta < wanted ? 0 : Math.max(0, omega - decel * dt)
       rotationRef.current = from + travelled
 
       // Ticker: kicked by each peg, sprung back to rest.
@@ -932,19 +1005,6 @@ function WheelPane({ ctx }) {
       paint()
 
       if (omega > 0.001 && travelled < distance) {
-        rafRef.current = requestAnimationFrame(step)
-        return
-      }
-
-      // Damped settle on the last few pixels, so it doesn't stop dead.
-      settleFrames += 1
-      const overshoot = distance - travelled
-      if (settleFrames < 14 && Math.abs(overshoot) > 0.0005) {
-        travelled += overshoot * 0.45
-        rotationRef.current = from + travelled
-        flapperRef.current = flapper * 0.55
-        flapper *= 0.55
-        paint()
         rafRef.current = requestAnimationFrame(step)
         return
       }
@@ -1038,7 +1098,13 @@ function WheelPane({ ctx }) {
     }
   }, [ctx, draft, wheelsQuery])
 
-  const chips = state.wheels.slice(0, 6)
+  // Every wheel, active first. This used to slice(0, 6), so any wheel past the
+  // sixth was unreachable from the pane — invisible, not just off-screen.
+  const chips = (() => {
+    const active = state.wheels.find((entry) => entry.id === state.active)
+    const rest = state.wheels.filter((entry) => entry !== active)
+    return active ? [active, ...rest] : state.wheels
+  })()
 
   return jsxs('div', {
     ref: shellRef,
@@ -1096,31 +1162,9 @@ function WheelPane({ ctx }) {
         ]
       }),
 
-      mode === 'auto' && !fits && items.length > 1
-        ? jsxs('div', {
-            className:
-              'flex flex-wrap items-center gap-1.5 rounded bg-(--chrome-action-hover) px-2 py-1 text-[0.6875rem] text-(--ui-text-secondary)',
-            children: [
-              jsx('span', { children: `${items.length} items — too many to label.` }),
-              jsx('button', {
-                type: 'button',
-                onClick: () => chooseMode('reel'),
-                className: 'rounded px-1.5 py-0.5 font-medium text-(--ui-accent) hover:bg-(--chrome-action-active)',
-                children: 'Reel it'
-              }),
-              jsx('button', {
-                type: 'button',
-                onClick: () => chooseMode('wheel'),
-                className: 'rounded px-1.5 py-0.5 hover:bg-(--chrome-action-active)',
-                children: 'Keep the bare wheel'
-              })
-            ]
-          })
-        : null,
-
       chips.length > 1
         ? jsx('div', {
-            className: 'flex flex-wrap gap-1',
+            className: 'flex max-h-[5.5rem] flex-wrap gap-1 overflow-y-auto',
             children: chips.map((entry) =>
               jsx(
                 'button',
@@ -1143,8 +1187,10 @@ function WheelPane({ ctx }) {
         : null,
 
       jsx('div', {
+        // No height cap: the shell already reserves the result slot and the
+        // button, so the wheel can take everything left above them. A cap here
+        // was leaving a slab of the pane empty on tall panes.
         className: 'relative min-h-0 flex-1 overflow-hidden',
-        style: { maxHeight: '62%' },
         children: jsxs('div', {
           className: 'flex h-full min-h-0 items-center justify-center',
           children: [
