@@ -5,3 +5,12 @@ venv/
 .pytest_cache/
 .DS_Store
 *.log
+
+# demo/ is tracked (small clip + screenshot); audio and scratch recordings are not.
+*.wav
+*.ogg
+*.flac
+*.mp3
+*.webm
+*.mov
+media/

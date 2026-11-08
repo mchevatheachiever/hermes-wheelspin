@@ -14,7 +14,7 @@
 
 import { Button, cn, haptic, host, PALETTE_AREA, useQuery } from '@hermes/plugin-sdk'
 import { jsx, jsxs } from 'react/jsx-runtime'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 const ID = 'wheelspin'
 const TAU = Math.PI * 2
@@ -23,6 +23,27 @@ const SLOT_SYMBOLS = ['7', '★', '◆', 'BAR', '♪', '$']
 // The palette row needs to reach the mounted pane's spin handler. Module scope
 // is the plugin's own; nothing outside the plugin reads it.
 let spinRequest = null
+
+// The pane's open state lives outside React: `openWorkspace` is a plain call
+// that hands back a disposer, and the status chip has to render "open" or
+// "closed" from it. Same shape as the ticklist pane, deliberately.
+const pane = { dispose: null, listeners: new Set() }
+
+function setPaneOpen(dispose) {
+  pane.dispose = dispose
+  for (const listener of pane.listeners) listener(Boolean(dispose))
+}
+
+function useIsPaneOpen() {
+  const [open, setOpen] = useState(Boolean(pane.dispose))
+  useEffect(() => {
+    const listener = (value) => setOpen(value)
+    pane.listeners.add(listener)
+    setOpen(Boolean(pane.dispose))
+    return () => pane.listeners.delete(listener)
+  }, [])
+  return open
+}
 
 // Friction model: dω/dt = -K·ω - MU   (viscous + Coulomb)
 const K = 5.2 // 1/s, viscous drag (air + hub)
@@ -191,6 +212,232 @@ function sectorGeometry(items, index) {
 /* canvas wheel                                                              */
 /* -------------------------------------------------------------------------- */
 
+// ── display mode: sectors vs reel ────────────────────────────────────────────
+// A sector can only carry a label if its arc is wide enough for one. Past that
+// the wheel is either bare (the user's choice) or it becomes a tape.
+const LABEL_MIN_ARC = 13
+const REEL_MIN_CELLS = 6
+
+/** True when every sector has room for a label at this radius. */
+function labelsFit(items, radius) {
+  if (!items.length || !(radius > 0)) return false
+  const total = items.reduce((sum, item) => sum + (item.weight || 1), 0) || 1
+  return items.every((item) => ((item.weight || 1) / total) * TAU * radius >= LABEL_MIN_ARC)
+}
+
+/**
+ * Where the tape must end so `index` sits under the needle, having travelled at
+ * least `minCells` cells. The tape repeats, so the answer is always ahead.
+ */
+function reelTarget(current, index, count, cell, minCells = REEL_MIN_CELLS) {
+  if (!(count > 0) || !(cell > 0)) return current
+  const base = index * cell
+  const away = minCells * cell
+  let target = base
+  while (target < current + away) target += count * cell
+  return target
+}
+
+function easeOutQuint(t) {
+  return 1 - Math.pow(1 - t, 5)
+}
+
+/**
+ * Break text into lines that fit `maxWidth`, capping at `maxLines` with an
+ * ellipsis. `measure` is injected (`ctx.measureText(...).width`) so the same
+ * function can be tested without a canvas.
+ */
+function wrapLines(text, maxWidth, maxLines, measure) {
+  const words = String(text).split(/\s+/).filter(Boolean)
+  const all = []
+  let line = ''
+  for (const word of words) {
+    const next = line ? `${line} ${word}` : word
+    if (!line || measure(next) <= maxWidth) {
+      line = next
+      continue
+    }
+    all.push(line)
+    line = word
+  }
+  if (line) all.push(line)
+  if (all.length <= maxLines) return all
+  const kept = all.slice(0, Math.max(1, maxLines))
+  let last = kept[kept.length - 1]
+  while (last.length > 1 && measure(`${last}…`) > maxWidth) last = last.slice(0, -1)
+  kept[kept.length - 1] = `${last}…`
+  return kept
+}
+
+/** Cabinet and cell geometry, so the renderer and the target offset agree. */
+function reelGeometry(width, height) {
+  // The cabinet has a sensible maximum: pulled wide, a slot machine should not
+  // become a hallway. Past this it stays centred with air either side.
+  // Tighter cabinet: it was claiming nearly the whole pane and leaving the
+  // cells padded out with empty space.
+  const bodyW = Math.min(width - 16, Math.max(300, Math.min(width * 0.58, 440)))
+  const bodyH = Math.min(height - 8, Math.max(220, height * 0.74))
+  const pad = 16
+  const winW = bodyW - pad * 2
+  const winH = bodyH - pad * 2 - 12
+  // Font tracks the width, so pulling the pane open enlarges the text rather
+  // than just widening it; the cell then grows to hold the lines.
+  const font = Math.max(12, Math.min(21, winW / 34))
+  const lineHeight = font * 1.3
+  // About two cells visible, however tall the pane is — the tape reads as a
+  // machine, and each cell can carry a paragraph.
+  const cell = Math.max(96, Math.min(200, winH / 2.4))
+  const maxLines = Math.max(1, Math.min(5, Math.floor((cell - 18) / lineHeight)))
+  return { bodyW, bodyH, pad, winW, winH, cell, font, lineHeight, maxLines }
+}
+
+/**
+ * Draw a vertical reel in a slot-machine cabinet: a rounded body with a lit
+ * bezel, an inset window, and the tape scrolling up past a fixed needle.
+ * `offset` is that scroll in pixels.
+ */
+function drawReel(canvas, items, offset, winner, spinning) {
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+
+  // Match the bitmap to the element every paint. Without this the browser
+  // stretches the last frame when the pane is resized, which reads as the
+  // whole cabinet smearing instead of re-laying out.
+  const rect = canvas.getBoundingClientRect()
+  if (rect.width < 8 || rect.height < 8) return
+  const ratio = window.devicePixelRatio || 1
+  const width = Math.round(rect.width)
+  const height = Math.round(rect.height)
+  if (canvas.width !== width * ratio || canvas.height !== height * ratio) {
+    canvas.width = width * ratio
+    canvas.height = height * ratio
+  }
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0)
+  ctx.clearRect(0, 0, width, height)
+
+  const shell = readVar(canvas, '--ui-bg-secondary', '#151a17')
+  const panel = readVar(canvas, '--ui-bg-primary', '#0e1210')
+  const line = readVar(canvas, '--ui-border', '#2b3a31')
+  const accent = readVar(canvas, '--ui-accent', '#6fbf8b')
+  const text = readVar(canvas, '--ui-text-secondary', '#c8d5cc')
+
+  const cx = width / 2
+  const cy = height / 2
+  const count = items.length
+
+  // ── the cabinet ───────────────────────────────────────────────────────────
+  const { bodyW, bodyH, pad, winH } = reelGeometry(width, height)
+  const bodyX = cx - bodyW / 2
+  const bodyY = cy - bodyH / 2
+  const radius = 14
+
+  const rounded = (x, y, w, h, r) => {
+    ctx.beginPath()
+    if (typeof ctx.roundRect === 'function') {
+      ctx.roundRect(x, y, w, h, r)
+    } else {
+      ctx.moveTo(x + r, y)
+      ctx.arcTo(x + w, y, x + w, y + h, r)
+      ctx.arcTo(x + w, y + h, x, y + h, r)
+      ctx.arcTo(x, y + h, x, y, r)
+      ctx.arcTo(x, y, x + w, y, r)
+      ctx.closePath()
+    }
+  }
+
+  // body: a subtle vertical gradient, so it reads as a moulded case
+  const body = ctx.createLinearGradient(0, bodyY, 0, bodyY + bodyH)
+  body.addColorStop(0, shell)
+  body.addColorStop(1, panel)
+  rounded(bodyX, bodyY, bodyW, bodyH, radius)
+  ctx.fillStyle = body
+  ctx.fill()
+  ctx.strokeStyle = line
+  ctx.lineWidth = 1.5
+  ctx.stroke()
+
+  // lit bezel around the window
+  const winX = bodyX + pad
+  const winY = bodyY + pad + 6
+  const winW = bodyW - pad * 2
+  rounded(winX, winY, winW, winH, 10)
+  ctx.strokeStyle = accent
+  ctx.globalAlpha = spinning ? 0.85 : 0.35
+  ctx.lineWidth = 2
+  ctx.stroke()
+  ctx.globalAlpha = 1
+
+  // ── the tape, clipped to the window ───────────────────────────────────────
+  const { cell, font, lineHeight, maxLines } = reelGeometry(width, height)
+
+  ctx.save()
+  rounded(winX, winY, winW, winH, 10)
+  ctx.clip()
+  ctx.fillStyle = panel
+  ctx.fillRect(winX, winY, winW, winH)
+
+  const first = Math.floor((offset - cy) / cell) - 1
+  for (let i = first; i <= first + Math.ceil(winH / cell) + 2; i += 1) {
+    const idx = ((i % count) + count) % count
+    const item = items[idx]
+    const y = cy + (i * cell - offset)
+    if (y < winY - cell || y > winY + winH + cell) continue
+    const centred = Math.abs(i * cell - offset) < cell / 2
+    const isWinner = centred && winner === idx && !spinning
+
+    if (isWinner) {
+      ctx.fillStyle = 'rgba(111, 191, 139, 0.16)'
+      ctx.fillRect(winX, y - cell / 2, winW, cell)
+    }
+
+    ctx.strokeStyle = line
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.moveTo(winX + 8, y + cell / 2)
+    ctx.lineTo(winX + winW - 8, y + cell / 2)
+    ctx.stroke()
+
+    const label = String(item.label).toUpperCase()
+    ctx.font = `${isWinner ? 600 : 400} ${font}px system-ui, sans-serif`
+    ctx.fillStyle = isWinner ? accent : text
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    const lines = wrapLines(label, winW - 36, maxLines, (piece) => ctx.measureText(piece).width)
+    const block = lines.length * lineHeight
+    let lineY = y - block / 2 + lineHeight / 2
+    for (const piece of lines) {
+      ctx.fillText(piece, cx, lineY)
+      lineY += lineHeight
+    }
+  }
+
+  // The needle: the line you are reading against.
+  ctx.strokeStyle = accent
+  ctx.lineWidth = 2
+  ctx.beginPath()
+  ctx.moveTo(winX, cy - cell / 2)
+  ctx.lineTo(winX + winW, cy - cell / 2)
+  ctx.moveTo(winX, cy + cell / 2)
+  ctx.lineTo(winX + winW, cy + cell / 2)
+  ctx.stroke()
+  ctx.restore()
+
+  // Arrow markers sit on the frame, not inside the clip.
+  ctx.fillStyle = accent
+  ctx.beginPath()
+  ctx.moveTo(winX - 3, cy - 7)
+  ctx.lineTo(winX + 8, cy)
+  ctx.lineTo(winX - 3, cy + 7)
+  ctx.closePath()
+  ctx.fill()
+  ctx.beginPath()
+  ctx.moveTo(winX + winW + 3, cy - 7)
+  ctx.lineTo(winX + winW - 8, cy)
+  ctx.lineTo(winX + winW + 3, cy + 7)
+  ctx.closePath()
+  ctx.fill()
+}
+
 function drawWheel(canvas, items, rotation, winner, spinning, flapper) {
   const ctx = canvas.getContext('2d')
   if (!ctx || !items.length) return
@@ -237,12 +484,19 @@ function drawWheel(canvas, items, rotation, winner, spinning, flapper) {
     // Label sizing comes from the room the sector actually has: arc length on
     // the rim sets the font, radial length sets how many characters fit. This
     // is what lets a 50-item wheel still be readable.
+    // Label sizing comes from the room the sector actually has: arc length on
+    // the rim sets the font, radial length sets how many characters fit.
     const arc = sweep * radius
-    if (arc >= 13) {
+    if (arc >= 13 || isWinner) {
+      const mid = angle + sweep / 2
+      // Keep the text upright. Rotating every label by its mid-angle reads
+      // correctly on the right half and upside down on the left, so anything
+      // past vertical is flipped and anchored from the other end.
+      const flipped = Math.cos(mid) < 0
       ctx.save()
       ctx.translate(cx, cy)
-      ctx.rotate(angle + sweep / 2)
-      ctx.textAlign = 'right'
+      ctx.rotate(flipped ? mid + Math.PI : mid)
+      ctx.textAlign = flipped ? 'left' : 'right'
       ctx.textBaseline = 'middle'
       const size = Math.max(7, Math.min(14, radius * 0.075, arc * 0.62))
       ctx.font = `${isWinner ? 600 : 400} ${size}px system-ui, sans-serif`
@@ -251,7 +505,8 @@ function drawWheel(canvas, items, rotation, winner, spinning, flapper) {
       const room = radius - 10
       const maxChars = Math.max(3, Math.floor(room / (size * 0.52)))
       const shown = text.length > maxChars ? `${text.slice(0, maxChars - 1)}…` : text
-      if (ctx.measureText(shown).width <= room) ctx.fillText(shown, radius - 8, 0)
+      const x = flipped ? -(radius - 8) : radius - 8
+      if (ctx.measureText(shown).width <= room) ctx.fillText(shown, x, 0)
       ctx.restore()
     }
     angle += sweep
@@ -388,6 +643,10 @@ function JackpotOverlay({ slot }) {
 
 function WheelPane({ ctx }) {
   const canvasRef = useRef(null)
+  const reelOffsetRef = useRef(0)
+  const [mode, setMode] = useState('auto') // auto | wheel | reel, per wheel
+  const [box, setBox] = useState({ w: 0, h: 0 })
+  const [shellH, setShellH] = useState(0)
   const shellRef = useRef(null)
   const rafRef = useRef(0)
   const rotationRef = useRef(0)
@@ -423,17 +682,30 @@ function WheelPane({ ctx }) {
   const items = wheel ? wheel.items : []
   const itemsKey = wheel ? `${wheel.id}:${wheel.updated_at}` : 'none'
 
+  // Reserved whether or not there is a result yet: an empty slot lets the
+  // button ride up and down as answers arrive.
+  const slotHeight = Math.round(Math.max(96, Math.min(168, (shellH || 620) * 0.26)))
+  const radius = box.w > 0 && box.h > 0 ? Math.min(box.w, box.h) / 2 - 18 : 0
+  const fits = radius > 0 ? labelsFit(items, radius) : true
+  // 'auto' means: label it if the sectors can carry labels, otherwise the tape.
+  const reelView = items.length > 0 && (mode === 'reel' || (mode === 'auto' && !fits))
+  const reelViewRef = useRef(reelView)
+  reelViewRef.current = reelView
+
   const paint = useCallback(() => {
-    if (canvasRef.current) {
-      drawWheel(
-        canvasRef.current,
-        itemsRef.current,
-        rotationRef.current,
-        winner,
-        spinning,
-        flapperRef.current
-      )
+    if (!canvasRef.current) return
+    if (reelViewRef.current) {
+      drawReel(canvasRef.current, itemsRef.current, reelOffsetRef.current, winner, spinning)
+      return
     }
+    drawWheel(
+      canvasRef.current,
+      itemsRef.current,
+      rotationRef.current,
+      winner,
+      spinning,
+      flapperRef.current
+    )
   }, [spinning, winner])
 
   useEffect(() => {
@@ -452,7 +724,15 @@ function WheelPane({ ctx }) {
   useEffect(() => {
     const element = shellRef.current
     if (!element || typeof ResizeObserver === 'undefined') return undefined
-    const observer = new ResizeObserver(() => paint())
+    const observer = new ResizeObserver(() => {
+      const element = canvasRef.current
+      if (element) {
+        const ratio = window.devicePixelRatio || 1
+        setBox({ w: element.width / ratio, h: element.height / ratio })
+      }
+      if (shellRef.current) setShellH(shellRef.current.clientHeight)
+      paint()
+    })
     observer.observe(element)
     return () => observer.disconnect()
   }, [paint])
@@ -560,6 +840,53 @@ function WheelPane({ ctx }) {
       return
     }
 
+    if (reelViewRef.current) {
+      // Same draw, different picture: the tape scrolls until the winning cell
+      // sits under the needle. `reelTarget` guarantees it travels at least a
+      // few cells, so a short list still reads as a spin.
+      const element = canvasRef.current
+      const ratio = window.devicePixelRatio || 1
+      const width = element ? element.width / ratio : 600
+      const height = element ? element.height / ratio : 400
+      const { cell, font, lineHeight, maxLines } = reelGeometry(width, height)
+      const from = reelOffsetRef.current
+      const to = reelTarget(from, target.index, list.length, cell)
+      const duration = 2100 + Math.random() * 900
+      const started = performance.now()
+      const blip = soundKit
+      let passed = Math.floor(from / cell)
+
+      const reelStep = (now) => {
+        const t = Math.min(1, (now - started) / duration)
+        reelOffsetRef.current = from + (to - from) * easeOutQuint(t)
+        const cellNow = Math.floor(reelOffsetRef.current / cell)
+        if (cellNow !== passed) {
+          passed = cellNow
+          if (blip) blip.tick(Math.max(0, 1 - t))
+        }
+        paint()
+        if (t < 1) {
+          rafRef.current = requestAnimationFrame(reelStep)
+          return
+        }
+        reelOffsetRef.current = to
+        setSpinning(false)
+        setWinner(target.index)
+        setResult(target.label)
+        setTick((value) => value + 1)
+        haptic('tap')
+        if (outcome.jackpot) {
+          fireJackpot(target.label, soundKit)
+          announce(`JACKPOT!!! ${target.label}`)
+        } else {
+          announce(target.label)
+        }
+      }
+
+      rafRef.current = requestAnimationFrame(reelStep)
+      return
+    }
+
     // Solve for the exact stop angle, then for the ω0 that friction will carry there.
     const { start, sweep } = sectorGeometry(list, target.index)
     const jitter = (Math.random() - 0.5) * sweep * 0.6
@@ -641,6 +968,49 @@ function WheelPane({ ctx }) {
     rafRef.current = requestAnimationFrame(step)
   }, [announce, ctx, fireJackpot, paint, sound, spinning, wheel, itemsKey])
 
+  // The choice belongs to the wheel, not the pane: a 6-item wheel should stay a
+  // wheel even after a 666-item one has been switched to the tape.
+  const loadedFor = useRef('')
+  const userChose = useRef(false)
+  useEffect(() => {
+    let alive = true
+    if (!wheel) return undefined
+    if (loadedFor.current === wheel.id) return undefined
+    loadedFor.current = wheel.id
+    ;(async () => {
+      let saved = 'auto'
+      try {
+        saved = (await ctx.storage.get(`mode:${wheel.id}`)) || 'auto'
+      } catch {
+        /* no storage: stay on auto */
+      }
+      if (alive && !userChose.current) {
+        setMode(saved === 'reel' || saved === 'wheel' ? saved : 'auto')
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [ctx, wheel && wheel.id])
+
+  const chooseMode = useCallback(
+    (next) => {
+      userChose.current = true
+      setMode(next)
+      // The canvas repaints on `tick`, not on `mode` — without this the switch
+      // flips state and leaves the old picture on screen.
+      setTick((value) => value + 1)
+      haptic('tap')
+      if (!wheel) return
+      try {
+        Promise.resolve(ctx.storage.set(`mode:${wheel.id}`, next)).catch(() => {})
+      } catch {
+        /* non-fatal */
+      }
+    },
+    [ctx, wheel]
+  )
+
   useEffect(() => {
     spinRequest = spin
     return () => {
@@ -681,6 +1051,25 @@ function WheelPane({ ctx }) {
           jsxs('div', {
             className: 'flex items-center gap-1',
             children: [
+              // Two buttons, each setting its mode outright. A single toggle
+              // had to infer the next state from the current one, and a stale
+              // read made it take two or three presses to land.
+              jsx(Button, {
+                size: 'xs',
+                variant: 'ghost',
+                onClick: () => chooseMode('wheel'),
+                title: 'Show the spinning wheel',
+                className: reelView ? undefined : 'bg-(--chrome-action-active) text-foreground',
+                children: '🎡'
+              }),
+              jsx(Button, {
+                size: 'xs',
+                variant: 'ghost',
+                onClick: () => chooseMode('reel'),
+                title: 'Show the tape reel',
+                className: reelView ? 'bg-(--chrome-action-active) text-foreground' : undefined,
+                children: '🎰'
+              }),
               jsx(Button, {
                 size: 'xs',
                 variant: 'ghost',
@@ -706,6 +1095,28 @@ function WheelPane({ ctx }) {
           })
         ]
       }),
+
+      mode === 'auto' && !fits && items.length > 1
+        ? jsxs('div', {
+            className:
+              'flex flex-wrap items-center gap-1.5 rounded bg-(--chrome-action-hover) px-2 py-1 text-[0.6875rem] text-(--ui-text-secondary)',
+            children: [
+              jsx('span', { children: `${items.length} items — too many to label.` }),
+              jsx('button', {
+                type: 'button',
+                onClick: () => chooseMode('reel'),
+                className: 'rounded px-1.5 py-0.5 font-medium text-(--ui-accent) hover:bg-(--chrome-action-active)',
+                children: 'Reel it'
+              }),
+              jsx('button', {
+                type: 'button',
+                onClick: () => chooseMode('wheel'),
+                className: 'rounded px-1.5 py-0.5 hover:bg-(--chrome-action-active)',
+                children: 'Keep the bare wheel'
+              })
+            ]
+          })
+        : null,
 
       chips.length > 1
         ? jsx('div', {
@@ -733,7 +1144,7 @@ function WheelPane({ ctx }) {
 
       jsx('div', {
         className: 'relative min-h-0 flex-1 overflow-hidden',
-        style: { maxHeight: '74%' },
+        style: { maxHeight: '62%' },
         children: jsxs('div', {
           className: 'flex h-full min-h-0 items-center justify-center',
           children: [
@@ -798,30 +1209,9 @@ function WheelPane({ ctx }) {
         : null,
 
       jsx('div', {
-        className: 'flex w-full shrink-0 items-center justify-center overflow-hidden px-1',
-        style: { height: '124px' },
-        children: result
-          ? jsx('div', {
-              style: {
-                color: 'var(--ui-accent)',
-                fontSize:
-                  result.length > 26 ? '34px' : result.length > 17 ? '42px' : '52px',
-                lineHeight: 1.05,
-                fontWeight: 800,
-                textAlign: 'center',
-                letterSpacing: '-0.01em',
-                overflowWrap: 'anywhere',
-                maxHeight: '100%',
-                display: '-webkit-box',
-                WebkitLineClamp: 2,
-                WebkitBoxOrient: 'vertical',
-                overflow: 'hidden',
-                textTransform: 'uppercase',
-                textShadow: '0 0 20px color-mix(in oklab, var(--ui-accent) 55%, transparent)'
-              },
-              children: result
-            })
-          : null
+        className: 'flex w-full shrink-0 items-center justify-center',
+        style: { height: `${slotHeight}px` },
+        children: result ? jsx(ResultBanner, { text: result, height: slotHeight }) : null
       }),
 
       jsx('div', {
@@ -876,16 +1266,213 @@ function WheelPane({ ctx }) {
   })
 }
 
+function StatusChip({ onToggle }) {
+  const isOpen = useIsPaneOpen()
+
+  // An icon and nothing else: the whole side panel is collapsed by the
+  // terminal's pill, which takes this pane with it, so this only has to say
+  // which tab it is and whether it is up.
+  return jsx('button', {
+    type: 'button',
+    onClick: () => {
+      haptic('tap')
+      if (onToggle() === false) {
+        host.notify({
+          kind: 'error',
+          message: 'This desktop cannot open the pane — use the command palette'
+        })
+      }
+    },
+    title: isOpen ? 'WheelSpin — close the pane' : 'WheelSpin — open the pane',
+    'aria-label': isOpen ? 'Close the WheelSpin pane' : 'Open the WheelSpin pane',
+    'aria-pressed': isOpen,
+    className:
+      'inline-flex h-full items-center px-1.5 text-[0.75rem] transition-colors text-(--ui-text-tertiary) hover:bg-(--chrome-action-hover) hover:text-foreground',
+    style: { opacity: isOpen ? 1 : 0.6 },
+    children: '🎡'
+  })
+}
+
+/**
+ * Result type size, solved from the space rather than measured and retried.
+ *
+ * A line of bold uppercase system text averages ~0.58em per character, so with
+ * L characters in a WxH box the type that fits is
+ * sqrt(H·W / (0.58 · lineGap · L)). Solving it directly means the size tracks
+ * the tab exactly — wider or taller pane, bigger answer — and cannot clip,
+ * because there is no measurement step to disagree with the layout.
+ */
+function bannerFontSize(text, width, height) {
+  const chars = Math.max(1, String(text).length)
+  if (!(width > 0) || !(height > 0)) return 40
+  const advance = 0.58
+  const lineGap = 1.16
+  const fit = Math.sqrt((height * 0.94 * width) / (advance * lineGap * chars))
+  return Math.max(8, Math.min(52, Math.round(fit)))
+}
+
+/** The winning line above the button, sized to the space it is given. */
+function ResultBanner({ text, height = 124 }) {
+  const boxRef = useRef(null)
+  const [dims, setDims] = useState({ w: 0, h: 0 })
+
+  useLayoutEffect(() => {
+    const element = boxRef.current
+    if (!element) return undefined
+    const read = () => setDims({ w: element.clientWidth, h: element.clientHeight })
+    read()
+    if (typeof ResizeObserver === 'undefined') return undefined
+    const observer = new ResizeObserver(read)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
+
+  // The formula is a good first guess, not a guarantee: it assumes an average
+  // character advance, and bold uppercase with tight tracking runs wider. Start
+  // there, then shrink until the box genuinely fits — never grow, so this can't
+  // oscillate with the layout.
+  const [size, setSize] = useState(0)
+  const textRef = useRef(null)
+  useLayoutEffect(() => {
+    const box = boxRef.current
+    const node = textRef.current
+    if (!box || !node) return
+    let next = bannerFontSize(text, dims.w, dims.h)
+    node.style.fontSize = `${next}px`
+    let guard = 0
+    while (node.scrollHeight > box.clientHeight - 2 && next > 8 && guard < 140) {
+      next -= 1
+      node.style.fontSize = `${next}px`
+      guard += 1
+    }
+    setSize(next)
+  }, [text, dims.w, dims.h])
+
+  return jsx('div', {
+    ref: boxRef,
+    style: {
+      height: `${height}px`,
+      width: '100%',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      overflow: 'hidden',
+      padding: '0 6px'
+    },
+    children: jsx('div', {
+      ref: textRef,
+      style: {
+        color: 'var(--ui-accent)',
+        fontSize: `${size || bannerFontSize(text, dims.w, dims.h)}px`,
+        lineHeight: 1.16,
+        fontWeight: 800,
+        textAlign: 'center',
+        letterSpacing: '-0.01em',
+        overflowWrap: 'anywhere',
+        textTransform: 'uppercase',
+        textShadow: '0 0 20px color-mix(in oklab, var(--ui-accent) 55%, transparent)'
+      },
+      children: text
+    })
+  })
+}
+
 export default {
   id: ID,
   name: 'WheelSpin',
   register(ctx) {
+    const remember = (closed) => {
+      try {
+        Promise.resolve(ctx.storage.set('paneClosed', closed)).catch(() => {})
+      } catch {
+        /* no storage: closing just won't stick */
+      }
+    }
+
+    const open = () => {
+      if (typeof host.openWorkspace !== 'function') return false
+      try {
+        const dispose = host.openWorkspace(ID, {
+          title: 'wheel',
+          // Land in the SAME zone as the terminal pane, as a sibling tab —
+          // that is what gives it a rail entry when the zone is collapsed.
+          dock: { pane: 'terminal', pos: 'center', enforce: true },
+          // A floor on the tile's width, so the zone sash cannot squeeze the
+          // canvas down to nothing.
+          minWidth: '20rem',
+          onClose: () => {
+            setPaneOpen(null)
+            remember(true)
+          },
+          render: () => jsx(WheelPane, { ctx })
+        })
+        // Wrap it so what is stored is always callable: a build whose
+        // openWorkspace returns something else must not leave a boolean here,
+        // or the chip can open the pane and never close it.
+        setPaneOpen(
+          typeof dispose === 'function'
+            ? () => {
+                try {
+                  dispose()
+                } catch {
+                  /* already torn down */
+                }
+              }
+            : () => setPaneOpen(null)
+        )
+        // Every open path — chip, palette, boot — clears the remembered close.
+        // Only onClose sets it, and the app also calls a pane's closer when a
+        // layout preset rests it, so a stale true heals on next visible.
+        remember(false)
+        return true
+      } catch (err) {
+        host.notify({
+          kind: 'error',
+          message: `wheel: could not open the pane — ${err && err.message ? err.message : err}`
+        })
+        return false
+      }
+    }
+
+    const toggle = () => {
+      if (typeof pane.dispose === 'function') {
+        pane.dispose()
+        setPaneOpen(null)
+        remember(true)
+        return true
+      }
+      return open()
+    }
+
+    // A pane the user closed must stay closed across a reload.
+    const openIfWanted = async () => {
+      let closed = false
+      try {
+        closed = (await ctx.storage.get('paneClosed')) === true
+      } catch {
+        /* no storage: behave as before */
+      }
+      if (!closed) open()
+    }
+
+    if (typeof host.openWorkspace !== 'function') {
+      // Older desktop: fall back to a plain pane; the zone tab strip still has it.
+      ctx.register({
+        id: 'pane',
+        area: 'panes',
+        title: 'wheel',
+        data: { placement: 'right', width: '620px' },
+        render: () => jsx(WheelPane, { ctx })
+      })
+    } else {
+      void openIfWanted()
+    }
+
     ctx.register({
-      id: 'pane',
-      area: 'panes',
-      title: 'wheel',
-      data: { placement: 'right', width: '620px' },
-      render: () => jsx(WheelPane, { ctx })
+      id: 'chip',
+      area: 'statusBar.right',
+      order: 129,
+      render: () => jsx(StatusChip, { onToggle: toggle })
     })
 
     ctx.register({
@@ -896,8 +1483,20 @@ export default {
         label: 'WheelSpin: try your luck',
         keywords: ['wheel', 'spin', 'random', 'pick', 'jackpot'],
         run: () => {
-          if (spinRequest) spinRequest()
-          else host.notify({ kind: 'info', message: 'Open the wheel pane first.' })
+          // The handler lives on the mounted pane, so a closed pane used to
+          // just report "open it first". Open it, then spin.
+          if (typeof spinRequest === 'function') {
+            spinRequest()
+            return
+          }
+          if (!open()) return
+          requestAnimationFrame(() => {
+            if (typeof spinRequest === 'function') {
+              spinRequest()
+            } else {
+              host.notify({ kind: 'info', message: 'Wheel pane is open — press Try your luck.' })
+            }
+          })
         }
       }
     })

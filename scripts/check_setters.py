@@ -16,6 +16,8 @@ import sys
 from pathlib import Path
 
 DECL = re.compile(r"const\s*\[\s*\w+\s*,\s*(set[A-Z]\w*)\s*\]\s*=\s*useState")
+# A local helper named like a setter is its own declaration, not a dead useState call.
+DECL_FN = re.compile(r"function\s+(set[A-Z]\w*)\s*\(")
 # A setter may also be a useCallback wrapper (persisting a preference, etc.).
 DECL_CB = re.compile(r"const\s+(set[A-Z]\w*)\s*=\s*useCallback")
 CALL = re.compile(r"\b(set[A-Z]\w*)\s*\(")
@@ -25,12 +27,17 @@ GLOBALS = {
     "setInterval", "setTimeout", "setTransform", "setValueAtTime",
     "setTargetAtTime", "setLineDash", "setAttribute", "setProperty",
     "setItem", "setRequestHeader", "setSelectionRange", "setRangeText",
+    "setData",  # DataTransfer.setData — drag and drop
 }
 
 
 def check(path: Path) -> list[str]:
     source = path.read_text(encoding="utf-8")
-    declared = set(DECL.findall(source)) | set(DECL_CB.findall(source))
+    declared = (
+        set(DECL.findall(source))
+        | set(DECL_CB.findall(source))
+        | set(DECL_FN.findall(source))
+    )
     problems = []
     for name in sorted(set(CALL.findall(source)) - declared - GLOBALS):
         # A setter may legitimately come from somewhere else (props/context);
@@ -51,6 +58,8 @@ HOOK = re.compile(r"\b(use[A-Z][A-Za-z0-9]*)\s*\(")
 REACT_IMPORT = re.compile(r"import\s*\{([^}]*)\}\s*from\s*'react'")
 SDK_IMPORT = re.compile(r"import\s*\{([^}]*)\}\s*from\s*'@hermes/plugin-sdk'")
 HOOK_GLOBALS = {"useMemo"}  # add exceptions here if a hook arrives another way
+# A custom hook declared in this file needs no import.
+HOOK_DECL = re.compile(r"(?:function|const)\s+(use[A-Z][A-Za-z0-9]*)\s*[(=]")
 
 
 def check_hooks(path: Path) -> list[str]:
@@ -65,9 +74,10 @@ def check_hooks(path: Path) -> list[str]:
         for match in pattern.finditer(source):
             for name in match.group(1).split(","):
                 imported.add(name.split(" as ")[-1].strip())
+    local_hooks = set(HOOK_DECL.findall(source))
     problems = []
     for name in sorted(set(HOOK.findall(source))):
-        if name in imported or name in HOOK_GLOBALS:
+        if name in imported or name in HOOK_GLOBALS or name in local_hooks:
             continue
         line = next((n for n, text in enumerate(source.splitlines(), 1) if f"{name}(" in text), 0)
         problems.append(f"{path}:{line}: {name}() is called but never imported")
