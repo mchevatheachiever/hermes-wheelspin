@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.2.2 — 2026-11-08
+
+Second review pass (issue #1, N16–N18).
+
+### Fixed
+- **`_as_float` accepted `nan` / `inf`.** `float()` takes them happily, so a
+  store containing `"created_at": "nan"` came back as NaN and `write()` then
+  serialised the literal into `wheels.json` (`json.dumps` allows NaN by default),
+  which a strict parser rejects. Non-finite values now fall back to the default.
+  Two tests: the coercion itself, and a round-trip proving no `NaN`/`Infinity`
+  reaches the file.
+- **Duplicate `variant` key** on both mode buttons — the stale `'ghost'` above
+  `onClick` was dead text that would eventually be edited by mistake.
+- **A dead store read on every spin.** `store.get(result["wheel_id"])` existed
+  only to populate `items_detail`; it re-read and re-parsed `wheels.json` outside
+  the lock for nothing.
+
+### Changed
+- **`art.py` no longer has an unreachable fallback.** `draw_hierarchical` always
+  sets `path`, so the `else` branch could only ever render an empty belt. A spin
+  result without `path` now raises `KeyError` instead of drawing nothing.
+
 ## 1.2.1 — 2026-11-08
 
 Review fixes (issue #1).

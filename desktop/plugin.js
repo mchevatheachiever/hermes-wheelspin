@@ -1123,7 +1123,6 @@ function WheelPane({ ctx }) {
               // read made it take two or three presses to land.
               jsx(Button, {
                 size: 'xs',
-                variant: 'ghost',
                 onClick: () => chooseMode('wheel'),
                 title: 'Show the spinning wheel',
                 variant: reelView ? 'ghost' : 'secondary',
@@ -1131,7 +1130,6 @@ function WheelPane({ ctx }) {
               }),
               jsx(Button, {
                 size: 'xs',
-                variant: 'ghost',
                 onClick: () => chooseMode('reel'),
                 title: 'Show the tape reel',
                 variant: reelView ? 'secondary' : 'ghost',

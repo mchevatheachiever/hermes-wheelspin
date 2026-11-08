@@ -26,7 +26,6 @@ def _slash_wheel(raw_args: str = "") -> str:
     try:
         store = core.WheelStore()
         result = store.spin(name, count=1)
-        wheel = store.get(result["wheel_id"])
     except core.WheelError as exc:
         return f"wheel: {exc}"
     except OSError as exc:

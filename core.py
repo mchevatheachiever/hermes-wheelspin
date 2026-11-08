@@ -12,6 +12,7 @@ the tool and the API can both write without truncating each other.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import secrets
@@ -189,6 +190,8 @@ def _as_float(value: Any, default: float = 0.0) -> float:
     try:
         number = float(value)
     except (TypeError, ValueError):
+        return default
+    if not math.isfinite(number):
         return default
     return number or default
 

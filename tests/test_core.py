@@ -241,6 +241,43 @@ class BadTimestampTest(unittest.TestCase):
         self.assertGreater(wheel["created_at"], 0)
 
 
+class NonFiniteTimestampTest(unittest.TestCase):
+    """NaN and Infinity are numbers to float(), and poison to JSON."""
+
+    def test_non_finite_timestamps_are_rejected(self):
+        for bad in ("nan", "inf", "-inf", "NaN", "Infinity"):
+            self.assertEqual(core._as_float(bad, 7), 7, bad)
+        self.assertEqual(core._as_float("1700000000", 7), 1700000000.0)
+
+    def test_a_nan_timestamp_cannot_reach_the_file(self):
+        root = Path(tempfile.mkdtemp()) / "wheelspin"
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "wheels.json").write_text(
+            json.dumps(
+                {
+                    "wheels": {
+                        "w": {
+                            "id": "w",
+                            "name": "w",
+                            "items": [{"label": "a", "weight": 1}],
+                            "created_at": "nan",
+                            "updated_at": "inf",
+                        }
+                    },
+                    "active": "w",
+                    "history": [],
+                    "order": ["w"],
+                }
+            ),
+            encoding="utf-8",
+        )
+        store = core.WheelStore(root)
+        store.write(store.read())
+        text = (root / "wheels.json").read_text()
+        self.assertNotIn("NaN", text)
+        self.assertNotIn("Infinity", text)
+
+
 class StoreTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

@@ -72,7 +72,6 @@ def wheelspin_spin(args: dict, **kwargs: Any) -> str:
             result = store.spin(loaded["id"], count=count)
         else:
             result = store.spin(args.get("name"), count=count)
-        wheel = store.get(result["wheel_id"])
     except core.WheelError as exc:
         return tool_error(str(exc))
     except OSError as exc:

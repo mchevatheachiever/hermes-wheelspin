@@ -134,23 +134,21 @@ def render_art(
 
 def render_result(spin: dict[str, Any]) -> str:
     """Full text block for one spin result: art + headline."""
-    wheel_items = spin.get("items_detail") or []
     path = spin.get("path") or []
     winner = spin["winners"][0]
     is_jackpot = bool(spin.get("jackpot"))
 
     # Big wheels feed through belts; the last stage holds the sector that won.
-    stage = path[-1] if path else None
-    if stage:
-        shown = [
-            {"label": label, "weight": weight}
-            for label, weight in zip(stage["labels"], stage["weights"])
-        ]
-        stage_index = stage["chosen"]
-    else:
-        shown = wheel_items
-        stage_index = winner["index"]
-
+    # `draw_hierarchical` always sets `path`, so there is no fallback: a spin
+    # result without one is a bug, not a case to render an empty belt for.
+    if not path:
+        raise KeyError("spin result has no path")
+    stage = path[-1]
+    shown = [
+        {"label": label, "weight": weight}
+        for label, weight in zip(stage["labels"], stage["weights"])
+    ]
+    stage_index = stage["chosen"]
     belts = int(spin.get("belts") or 1)
     title = f"wheel: {spin['wheel']}"
     if belts > 1 and path:
