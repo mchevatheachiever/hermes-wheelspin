@@ -241,6 +241,24 @@ class BadTimestampTest(unittest.TestCase):
         self.assertGreater(wheel["created_at"], 0)
 
 
+class ResultContractTest(unittest.TestCase):
+    """`render_result` has no fallback any more, so prove the invariant holds."""
+
+    def test_render_result_requires_a_path(self):
+        with self.assertRaises(KeyError):
+            art.render_result({"wheel": "w", "winners": [{"label": "a", "index": 0}]})
+
+    def test_render_result_renders_when_the_path_is_present(self):
+        spin = {
+            "wheel": "w",
+            "winners": [{"label": "a", "index": 0}],
+            "path": [{"labels": ["a", "b"], "weights": [1, 1], "chosen": 0}],
+            "belts": 1,
+        }
+        text = art.render_result(spin)
+        self.assertIn("A", text)
+
+
 class NonFiniteTimestampTest(unittest.TestCase):
     """NaN and Infinity are numbers to float(), and poison to JSON."""
 

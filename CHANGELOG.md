@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.3 — 2026-11-08
+
+### Tests
+- **The `render_result` invariant is now protected, not just declared.** N2 removed
+  the fallback and made a missing `path` raise `KeyError`; nothing asserted it.
+  Two tests: the raise, and a successful render so the guard can't pass by
+  accident on a broken happy path.
+
 ## 1.2.2 — 2026-11-08
 
 Second review pass (issue #1, N16–N18).
