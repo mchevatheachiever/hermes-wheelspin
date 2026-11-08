@@ -46,12 +46,41 @@ def check(path: Path) -> list[str]:
     return problems
 
 
+
+HOOK = re.compile(r"\b(use[A-Z][A-Za-z0-9]*)\s*\(")
+REACT_IMPORT = re.compile(r"import\s*\{([^}]*)\}\s*from\s*'react'")
+SDK_IMPORT = re.compile(r"import\s*\{([^}]*)\}\s*from\s*'@hermes/plugin-sdk'")
+HOOK_GLOBALS = {"useMemo"}  # add exceptions here if a hook arrives another way
+
+
+def check_hooks(path: Path) -> list[str]:
+    """Every useX() call must be imported — an unimported hook throws on mount.
+
+    This is the second variant of the same failure: the file is valid syntax,
+    `node --check` is happy, and the pane only explodes when it renders.
+    """
+    source = path.read_text(encoding="utf-8")
+    imported = set()
+    for pattern in (REACT_IMPORT, SDK_IMPORT):
+        for match in pattern.finditer(source):
+            for name in match.group(1).split(","):
+                imported.add(name.split(" as ")[-1].strip())
+    problems = []
+    for name in sorted(set(HOOK.findall(source))):
+        if name in imported or name in HOOK_GLOBALS:
+            continue
+        line = next((n for n, text in enumerate(source.splitlines(), 1) if f"{name}(" in text), 0)
+        problems.append(f"{path}:{line}: {name}() is called but never imported")
+    return problems
+
+
 def main() -> int:
     targets = [Path(arg) for arg in sys.argv[1:]] or [Path("desktop/plugin.js")]
     problems: list[str] = []
     for target in targets:
         if target.exists():
             problems.extend(check(target))
+            problems.extend(check_hooks(target))
     for problem in problems:
         print(problem)
     return 1 if problems else 0
