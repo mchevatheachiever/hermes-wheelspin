@@ -136,12 +136,20 @@ def render_result(spin: dict[str, Any]) -> str:
     """Full text block for one spin result: art + headline."""
     path = spin.get("path") or []
     is_jackpot = bool(spin.get("jackpot"))
-
-    # Big wheels feed through belts; the last stage holds the sector that won.
-    # `draw_hierarchical` always sets `path`, so there is no fallback: a spin
-    # result without one is a bug, not a case to render an empty belt for.
     if not path:
         raise KeyError("spin result has no path")
+    if not spin.get("winners"):
+        raise KeyError("spin result has no winners")
+    # A multi-draw's banner is global ("any winner was a jackpot"), so the picture
+    # has to describe the draw the banner is about — otherwise the banner says
+    # jackpot while the pointer sits on draw 1. `paths` is absent on older results.
+    if is_jackpot:
+        jackpot_draw = next(
+            (i for i, w in enumerate(spin["winners"]) if w.get("jackpot")), 0
+        )
+        paths = spin.get("paths") or []
+        if jackpot_draw < len(paths):
+            path = paths[jackpot_draw]
     stage = path[-1]
     shown = [
         {"label": label, "weight": weight}

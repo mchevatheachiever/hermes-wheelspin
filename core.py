@@ -70,7 +70,7 @@ def _clean_weight(raw: Any) -> int:
         return 1
     try:
         weight = int(raw)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         raise WheelError("weight must be a whole number") from None
     if weight < 1:
         raise WheelError("weight must be at least 1")
@@ -200,7 +200,7 @@ def _as_float(value: Any, default: float = 0.0) -> float:
     """Coerce a stored timestamp. A bad value must not raise out of read()."""
     try:
         number = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
     if not math.isfinite(number):
         return default
@@ -215,14 +215,17 @@ def _as_name(value: Any, default: str) -> str:
 
 
 def _as_int(value: Any, default: int) -> int:
-    """Finite ints only — `int(nan)` and `int(inf)` raise."""
+    """Finite ints only — `int(nan)`, `int(inf)` and `int(10**400)` all raise."""
     try:
         number = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
     if not math.isfinite(number):
         return default
-    return int(number)
+    try:
+        return int(number)
+    except (OverflowError, ValueError):
+        return default
 
 
 def _salvage_items(raw_items: Any) -> list[dict[str, Any]]:
@@ -242,7 +245,11 @@ def _salvage_items(raw_items: Any) -> list[dict[str, Any]]:
         try:
             if isinstance(raw, dict):
                 label = _clean_label(raw.get("label", raw.get("text", raw.get("name"))))
-                weight = _clean_weight(raw.get("weight"))
+                try:
+                    weight = _clean_weight(raw.get("weight"))
+                except WheelError:
+                    # An unusable weight must not cost the option itself.
+                    weight = 1
             else:
                 label = _clean_label(raw)
                 weight = 1
@@ -375,20 +382,44 @@ class WheelStore:
             finally:
                 handle.close()
 
-    def _quarantine(self, *, locked: bool = False) -> None:
-        """Move an unreadable store aside so the next write cannot erase it.
-
-        Runs under the store lock unless the caller already holds it: a reader
-        that quarantines the file while a writer is mid-replace would otherwise
-        move the *fresh* store aside and reset the active path.
-        """
+    def _still_unreadable(self) -> bool:
+        """True if the file at the path right now still cannot be used as a store."""
         try:
-            target = self.path.with_name(f"{self.path.name}.corrupt-{time.time_ns()}")
-            if locked:
-                os.replace(self.path, target)
-            else:
-                with self._locked():
-                    os.replace(self.path, target)
+            text = self.path.read_text(encoding="utf-8")
+        except OSError:
+            return False
+        try:
+            parsed = json.loads(text)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return True
+        return not isinstance(parsed, dict)
+
+    def _quarantine(self, *, locked: bool = False) -> None:
+        """Move a corrupt store aside — but only if it is still corrupt.
+
+        A reader parses outside the lock, so by the time it takes the lock a
+        writer may already have replaced the bad bytes with a fresh store. The
+        file is re-checked *under* the lock; a store that parses now is left
+        alone, otherwise a late reader would quarantine the writer's good copy.
+        """
+
+        def attempt() -> None:
+            if not self._still_unreadable():
+                return
+            try:
+                os.replace(
+                    self.path,
+                    self.path.with_name(f"{self.path.name}.corrupt-{time.time_ns()}"),
+                )
+            except OSError:
+                pass
+
+        if locked:
+            attempt()
+            return
+        try:
+            with self._locked():
+                attempt()
         except OSError:
             pass
 
@@ -629,6 +660,7 @@ class WheelStore:
             "belts": len(magazines(wheel["items"])) if len(wheel["items"]) > MAX_SECTORS else 1,
             # The UI replays this: one entry per stage, last entry holds the winner.
             "path": draws[0]["path"],
+            "paths": [draw["path"] for draw in draws],
             "winners": [
                 {
                     "label": wheel["items"][index]["label"],

@@ -67,7 +67,7 @@ def wheelspin_spin(args: dict, **kwargs: Any) -> str:
     store = _store()
     try:
         count = int(args.get("count") or 1)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return tool_error("count must be a whole number")
     try:
         if args.get("items"):

@@ -632,6 +632,115 @@ class JackpotTests(unittest.TestCase):
         }
         self.assertIn("JACKPOT!!!", art.render_result(spin).splitlines()[-1])
 
+class QuarantineRaceTest(unittest.TestCase):
+    """N22: a late reader must not quarantine a store a writer just replaced."""
+
+    def test_late_quarantine_leaves_a_fresh_store_alone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "wheels.json"
+            path.write_text("{not json")
+            store = core.WheelStore(root)
+
+            # The writer wins the race: the bad bytes are replaced by a good store
+            # before the reader gets the lock.
+            good = {
+                "version": 1,
+                "active": "dinner",
+                "history": [],
+                "wheels": {
+                    "dinner": {
+                        "id": "dinner",
+                        "name": "dinner",
+                        "items": [{"label": "a", "weight": 1}, {"label": "b", "weight": 1}],
+                        "jackpots": [0],
+                        "source": "",
+                        "created_at": 1.0,
+                        "updated_at": 1.0,
+                    }
+                },
+            }
+            path.write_text(json.dumps(good))
+
+            store._quarantine()  # the reader's late rename
+
+            self.assertTrue(path.exists(), "the fresh store must survive")
+            self.assertEqual(list(root.glob("wheels.json.corrupt-*")), [])
+            self.assertIn("dinner", store.read()["wheels"])
+
+    def test_quarantine_still_moves_bytes_that_are_corrupt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "wheels.json"
+            path.write_text("{not json")
+            core.WheelStore(Path(tmp)).read()
+            self.assertFalse(path.exists())
+            self.assertEqual(len(list(Path(tmp).glob("wheels.json.corrupt-*"))), 1)
+
+
+class OverflowTest(unittest.TestCase):
+    """N29: Overflows are a read-path escape the N21 coercers did not catch."""
+
+    def test_stored_numbers_that_overflow_do_not_raise(self):
+        huge = "9" * 401
+        raw = (
+            '{"version":1,"active":"b","history":[],"wheels":{"b":{"id":"b","name":"b",'
+            '"items":[{"label":"p","weight":1e400},{"label":"q","weight":1}],'
+            '"jackpots":[' + huge + '],"source":"","created_at":' + huge + ',"updated_at":1}}}'
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "wheels.json").write_text(raw)
+            wheel = core.WheelStore(Path(tmp)).read()["wheels"]["b"]
+            self.assertEqual([i["weight"] for i in wheel["items"]], [1, 1])
+            self.assertGreaterEqual(len(wheel["jackpots"]), 1)
+            self.assertTrue(all(isinstance(i, int) for i in wheel["jackpots"]))
+
+    def test_input_weight_of_infinity_is_a_wheel_error(self):
+        with self.assertRaises(core.WheelError):
+            core.normalise_items([{"label": "a", "weight": float("inf")}])
+
+    def test_a_bad_count_of_infinity_falls_back_to_one(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = core.WheelStore(Path(tmp))
+            store.upsert("d", ["a", "b"])
+            self.assertEqual(len(store.spin("d", count=float("inf"))["winners"]), 1)
+
+    def test_a_huge_weight_is_clamped_not_dropped(self):
+        items = core._salvage_items([{"label": "a", "weight": 10**400}, {"label": "b", "weight": 1}])
+        self.assertEqual([i["label"] for i in items], ["a", "b"])
+        self.assertEqual([i["weight"] for i in items], [core.MAX_WEIGHT, 1])
+
+
+class RenderResultTest(unittest.TestCase):
+    def test_a_result_with_no_winners_is_a_bug_not_a_blank_banner(self):
+        spin = {
+            "wheel": "w",
+            "winners": [],
+            "jackpot": False,
+            "path": [{"kind": "items", "labels": ["a"], "weights": [1], "chosen": 0}],
+        }
+        with self.assertRaises(KeyError):
+            art.render_result(spin)
+
+    def test_the_picture_matches_the_draw_the_jackpot_banner_is_about(self):
+        # N27 tail: the banner is any-draw, but the art always drew draw 1's path.
+        spin = {
+            "wheel": "w",
+            "winners": [
+                {"label": "first", "jackpot": False},
+                {"label": "second", "jackpot": True},
+            ],
+            "jackpot": True,
+            "path": [{"kind": "items", "labels": ["first", "x"], "weights": [1, 1], "chosen": 0}],
+            "paths": [
+                [{"kind": "items", "labels": ["first", "x"], "weights": [1, 1], "chosen": 0}],
+                [{"kind": "items", "labels": ["second", "y"], "weights": [1, 1], "chosen": 0}],
+            ],
+            "belts": 1,
+        }
+        text = art.render_result(spin)
+        self.assertIn("SECOND", text)
+        self.assertIn("JACKPOT!!!", text.splitlines()[-1])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

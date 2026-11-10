@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.2.6 — 2026-11-10
+
+Seventh-round fixes from the same review thread: N22 re-opened, N29 new.
+
+### Fixed
+- **N22 — the quarantine rename did not verify what it renamed.** Putting the
+  rename under the lock was not enough: a reader parses outside the lock, so a
+  writer can replace the bad bytes with a fresh store before the reader's rename,
+  and the reader then quarantines the *good* file. `_quarantine` now re-checks
+  under the lock (`_still_unreadable`) and leaves a store that parses alone.
+  Tests: a late quarantine against a fresh store (must not move it) and the
+  ordinary corrupt-file path (must still move it).
+- **N29 — `OverflowError` escaped the coercers.** `int(float('inf'))` and
+  `int(10**400)` raise `OverflowError`, which `_as_float`, `_as_int` and
+  `_clean_weight` did not catch, so a valid-JSON store with `weight: 1e400`,
+  `jackpots: [10**400]` or a 401-digit `created_at` still 500'd every route. All
+  three catch it now; a stored weight that cannot be used falls back to 1 instead
+  of costing the option, and `wheelspin_spin` rejects an overflowing `count`.
+  Tests: the three stored fields, an input weight of `inf`, and a `count` of
+  `1e400`.
+
+### Small
+- `render_result` raises `KeyError` on an empty `winners` list instead of
+  rendering `★ The wheel says: ` — the same invariant as a missing `path`.
+- On a multi-draw jackpot, the drawing now follows the draw the banner is about
+  (`paths` + the winning draw's index) instead of always showing draw 1.
+
 ## 1.2.5 — 2026-11-10
 
 Second review round (P2P review by monadbot, findings N19–N28). Every item was
