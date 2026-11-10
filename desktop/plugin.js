@@ -506,12 +506,10 @@ function drawWheel(canvas, items, rotation, winner, spinning, flapper) {
   const ctx = canvas.getContext('2d')
   if (!ctx || !items.length) return
 
-  const rect = canvas.getBoundingClientRect()
-  if (rect.width < 8 || rect.height < 8) return
+  const { width, height } = canvasBox(canvas)
+  if (width < 8 || height < 8) return
 
   const dpr = window.devicePixelRatio || 1
-  const width = Math.round(rect.width)
-  const height = Math.round(rect.height)
   if (canvas.width !== width * dpr || canvas.height !== height * dpr) {
     canvas.width = width * dpr
     canvas.height = height * dpr

@@ -72,6 +72,28 @@ class ApiTest(unittest.TestCase):
         self.assertIn(winner["label"], {"pizza", "thai", "sushi"})
         self.assertIn(winner["index"], (0, 1, 2))
 
+    def test_spin_a_wheel_that_cannot_be_drawn_is_400(self):
+        # A salvaged wheel with no usable items still exists, so it is not a 404.
+        state = {
+            "version": 1,
+            "active": "empty",
+            "history": [],
+            "wheels": {
+                "empty": {
+                    "id": "empty",
+                    "name": "empty",
+                    "items": [],
+                    "jackpots": [],
+                    "source": "",
+                    "created_at": 1.0,
+                    "updated_at": 1.0,
+                }
+            },
+        }
+        (Path(self.tmp.name) / "wheels.json").write_text(json.dumps(state))
+        response = self.client.post("/api/plugins/wheelspin/wheels/empty/spin", json={"count": 1})
+        self.assertEqual(response.status_code, 400, response.text)
+
     def test_spin_unknown_wheel_is_404(self):
         response = self.client.post("/api/plugins/wheelspin/wheels/nope/spin", json={"count": 1})
         self.assertEqual(response.status_code, 404)

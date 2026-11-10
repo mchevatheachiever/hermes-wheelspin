@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.2.8 — 2026-11-10
+
+Final pre-publish pass: full read of both halves, README and bundled skill, and
+the gates run exactly as the docs print them.
+
+### Fixed
+- **`items` accepted a mapping.** A dict is `Iterable`, so `{"items": {"text":
+  "milk"}}` iterated its keys and stored an option literally named `text`. Input
+  validation now refuses a `Mapping` with a message that says to wrap it in a list;
+  the lenient stored-data path (`_salvage_items`) already rejected one.
+- **A wheel that exists but cannot be drawn answered 404.** `spin` mapped every
+  `WheelError` to 404, so an empty salvaged wheel said "not found" while it was
+  right there. `WheelNotFound` is now a distinct error: unknown wheel → 404,
+  undrawable wheel → 400.
+
+### Docs
+- README: the source-install line (`hermes plugins install <owner>/<repo>`), the
+  🎡/🎰 display toggle, and a Development block whose commands were each run as
+  written — `python3 -m unittest tests.test_core`, `tests.test_api` (the runtime
+  venv has fastapi + httpx), `node --test tests/display.test.mjs`, and
+  `hermes plugins validate . --install-deps`.
+- Bundled skill version tracks the plugin.
+
 ## 1.2.7 — 2026-11-10
 
 One regression from the 1.2.6 quarantine re-check, found in the same review thread.

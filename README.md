@@ -35,6 +35,12 @@ The screenshot above is a frame from that video.
 hermes plugins install wheelspin
 ```
 
+Or straight from this repo, which always tracks the latest release:
+
+```bash
+hermes plugins install mchevatheachiever/hermes-wheelspin
+```
+
 Then enable it in **Settings ▸ Plugins** (the Desktop half is opt-in) and open
 the **wheel** pane. The agent tools work without the pane, so CLI, TUI, Discord
 and cron all get the text wheel.
@@ -92,7 +98,9 @@ routed through the shared gateway).
 ## Surfaces
 
 - **Desktop**: canvas wheel pane, peg ticker, WebAudio ticks, slot-machine
-  jackpot reveal, result posted back into the chat.
+  jackpot reveal, result posted back into the chat. A per-wheel 🎡/🎰 toggle
+  switches between the sector wheel and a tape reel for very long lists, and the
+  win is announced under the wheel before it is posted.
 - **CLI / TUI / gateway / Discord**: a wheel cannot be drawn in text and a list of
   300 lines is not a display, so a *spin result* is one belt of at most 8 rows with
   the winner marked, a probability legend and the `JACKPOT!!!` banner; loading a
@@ -114,7 +122,9 @@ routed through the shared gateway).
 ```bash
 python3 scripts/check_setters.py desktop/plugin.js   # dead-useState guards
 node --check desktop/plugin.js                       # the pane must parse
+node --test tests/display.test.mjs                   # reel, ticks, banner math
 python3 -m unittest tests.test_core                  # core, art, store (stdlib only)
+python3 -m unittest tests.test_api                   # routes — needs fastapi + httpx
 hermes plugins validate . --install-deps             # catalog admission gate
 ```
 
@@ -122,13 +132,8 @@ hermes plugins validate . --install-deps             # catalog admission gate
 `useState` was deleted: that is valid syntax, and it only throws when the pane
 mounts — which is exactly how this plugin shipped a "failed to render" once.
 
-The API tests need FastAPI. Any interpreter that has it will do — the Hermes
-runtime venv ships with it:
-
-```bash
-python -c "import fastapi" || pip install fastapi httpx
-cd tests && python -m unittest test_api
-```
+The API tests need FastAPI and httpx; the Hermes runtime venv already has both,
+so `python3 -m unittest tests.test_api` works as written.
 
 ## License
 

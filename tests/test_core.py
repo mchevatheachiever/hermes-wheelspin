@@ -32,6 +32,12 @@ class ItemsTest(unittest.TestCase):
         out = core.normalise_items(["Pizza", "pizza", "Thai"])
         self.assertEqual(out, [{"label": "Pizza", "weight": 2}, {"label": "Thai", "weight": 1}])
 
+    def test_rejects_a_mapping_container(self):
+        # A dict is Iterable: iterating it would store an item named "text".
+        with self.assertRaises(core.WheelError) as ctx:
+            core.normalise_items({"text": "milk"})
+        self.assertIn("wrap the object in a list", str(ctx.exception))
+
     def test_rejects_empty(self):
         with self.assertRaises(core.WheelError):
             core.normalise_items([])

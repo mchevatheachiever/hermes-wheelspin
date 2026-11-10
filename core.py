@@ -45,6 +45,10 @@ class WheelError(ValueError):
     """Raised for bad user input; callers turn this into a tool_error."""
 
 
+class WheelNotFound(WheelError):
+    """Raised when a named wheel does not exist — a 404, not a 400."""
+
+
 def plugin_data_dir(name: str = "wheelspin"):
     from plugins.plugin_storage import plugin_data_dir as _dir
 
@@ -86,6 +90,10 @@ def normalise_items(raw_items: Any) -> list[dict[str, Any]]:
     """
     if isinstance(raw_items, str):
         raw_items = [line for line in raw_items.splitlines()]
+    if isinstance(raw_items, Mapping):
+        # A dict is Iterable, so it would iterate its *keys* and store an item
+        # named after one. Models produce this shape routinely.
+        raise WheelError("items must be a list of labels — wrap the object in a list")
     if not isinstance(raw_items, Iterable):
         raise WheelError("items must be a list of labels")
 
@@ -269,13 +277,8 @@ def _salvage_items(raw_items: Any) -> list[dict[str, Any]]:
 def _clean_jackpots(raw: Any, item_count: int) -> list[int]:
     if not isinstance(raw, list):
         return choose_jackpots(item_count)
-    values = sorted(
-        {
-            _as_int(v, -1)
-            for v in raw
-            if _as_int(v, -1) >= 0 and _as_int(v, -1) < item_count
-        }
-    )
+    candidates = (_as_int(value, -1) for value in raw)
+    values = sorted({index for index in candidates if 0 <= index < item_count})
     if not values and item_count >= 2:
         # Every wheel of 2+ options carries at least one jackpot, so an empty or
         # unreadable list is damage, not a decision — re-roll rather than ship a
@@ -612,14 +615,14 @@ class WheelStore:
         state = self.read()
         wheels = state["wheels"]
         if not wheels:
-            raise WheelError("no wheel has been loaded yet")
+            raise WheelNotFound("no wheel has been loaded yet")
         if name is None:
             wheel = wheels.get(state["active"]) or next(iter(wheels.values()))
             return wheel
         _, wheel = self._resolve(state, name)
         if wheel is None:
             known = ", ".join(sorted(w["name"] for w in wheels.values()))
-            raise WheelError(f"no wheel called {name!r}; known wheels: {known}")
+            raise WheelNotFound(f"no wheel called {name!r}; known wheels: {known}")
         return wheel
 
     def delete(self, name: str) -> dict[str, Any]:
@@ -628,7 +631,7 @@ class WheelStore:
             wheel_id, _known = self._resolve(state, name)
             wheel = state["wheels"].pop(wheel_id, None)
             if wheel is None:
-                raise WheelError(f"no wheel called {name!r}")
+                raise WheelNotFound(f"no wheel called {name!r}")
             if state["active"] == wheel_id:
                 state["active"] = next(iter(state["wheels"]), "")
             self.write(state)

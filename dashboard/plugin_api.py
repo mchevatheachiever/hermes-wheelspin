@@ -128,8 +128,10 @@ async def spin_wheel(wheel_id: str, payload: SpinPayload | None = None) -> dict[
     count = (payload or SpinPayload()).count
     try:
         result = _store().spin(wheel_id, count=count)
-    except core.WheelError as exc:
+    except core.WheelNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except core.WheelError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except OSError as exc:
         logger.warning("wheelspin: wheel store unreadable: %s", exc)
         raise HTTPException(status_code=500, detail="wheel store unreadable") from exc
@@ -140,8 +142,10 @@ async def spin_wheel(wheel_id: str, payload: SpinPayload | None = None) -> dict[
 async def delete_wheel(wheel_id: str) -> dict[str, Any]:
     try:
         wheel = _store().delete(wheel_id)
-    except core.WheelError as exc:
+    except core.WheelNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except core.WheelError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except OSError as exc:
         logger.warning("wheelspin: store delete failed: %s", exc)
         raise HTTPException(status_code=500, detail="wheel store unwritable") from exc
