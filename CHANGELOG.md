@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.10 — 2026-11-10
+
+- Fresh pane screenshot for the README and the catalog card: the previous still
+  was captured before the ticker fix and showed the flapper floating above a
+  centred wheel.
+
 ## 1.2.9 — 2026-11-10
 
 Docs-only follow-up to the pre-publish pass.
