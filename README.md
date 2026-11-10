@@ -104,7 +104,7 @@ routed through the shared gateway).
 - **CLI / TUI / gateway / Discord**: a wheel cannot be drawn in text and a list of
   300 lines is not a display, so a *spin result* is one belt of at most 8 rows with
   the winner marked, a probability legend and the `JACKPOT!!!` banner; loading a
-  wheel prints the whole list as a strip.
+  wheel prints the proportional strip plus a legend of its largest sectors.
 
 ## Disclosure
 
@@ -114,6 +114,8 @@ routed through the shared gateway).
 - **No credentials**, no environment variables, no telemetry.
 - **Audio** is synthesised locally with WebAudio (peg ticks, press clack, jackpot
   fanfare) and can be muted with the ♪ button.
+- **No extra auth.** `/api/plugins/wheelspin/` sits behind the dashboard's own
+  access control; the plugin adds none of its own.
 - **Chat hand-off**: when a spin lands, the pane submits `The wheel says: <label>`
   to the active composer so Hermes can react. Toggle it off with the 💬 button.
 

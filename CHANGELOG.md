@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.9 — 2026-11-10
+
+Docs-only follow-up to the pre-publish pass.
+
+- README Disclosure now states the auth posture: `/api/plugins/wheelspin/` sits
+  behind the dashboard's own access control and the plugin adds none.
+- README: the text surface claim for *loading* a wheel corrected — it prints the
+  proportional strip plus a legend of the largest sectors, not "the whole list".
+
 ## 1.2.8 — 2026-11-10
 
 Final pre-publish pass: full read of both halves, README and bundled skill, and

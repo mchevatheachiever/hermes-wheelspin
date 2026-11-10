@@ -1,7 +1,7 @@
 ---
 name: wheelspin
 description: "Spin a weighted wheel to decide between options, with a jackpot reveal."
-version: 1.2.8
+version: 1.2.9
 ---
 
 # WheelSpin
