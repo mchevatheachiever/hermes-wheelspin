@@ -208,6 +208,37 @@ function sectorGeometry(items, index) {
   return { start, sweep: (items[index].weight / total) * TAU }
 }
 
+/** Cumulative start angle of every sector — where the pegs sit on the rim. */
+function sectorStarts(items) {
+  const total = items.reduce((sum, item) => sum + item.weight, 0) || 1
+  const starts = []
+  let angle = 0
+  for (const item of items) {
+    starts.push(angle)
+    angle += (item.weight / total) * TAU
+  }
+  return starts
+}
+
+/**
+ * Which sector owns `angle`. The ticker hits a peg per *weighted* boundary, so
+ * the tick must be driven by the same boundaries the pegs are drawn at; deriving
+ * it from `angle / TAU * count` assumes equal sectors and drifts out of sync on
+ * any weighted wheel.
+ */
+function pegIndexAt(starts, angle) {
+  if (!starts.length) return 0
+  const wrapped = ((angle % TAU) + TAU) % TAU
+  let low = 0
+  let high = starts.length - 1
+  while (low < high) {
+    const mid = (low + high + 1) >> 1
+    if (starts[mid] <= wrapped) low = mid
+    else high = mid - 1
+  }
+  return low
+}
+
 /* -------------------------------------------------------------------------- */
 /* canvas wheel                                                              */
 /* -------------------------------------------------------------------------- */
@@ -267,8 +298,13 @@ function reelGeometry(width, height) {
   // become a hallway. Past this it stays centred with air either side.
   // Tighter cabinet: it was claiming nearly the whole pane and leaving the
   // cells padded out with empty space.
-  const bodyW = Math.min(width - 16, Math.max(300, Math.min(width * 0.58, 440)))
-  const bodyH = Math.min(height - 8, Math.max(220, height * 0.74))
+  // Clamped before any arithmetic: a zero-sized canvas (mounting, or a collapsed
+  // pane) made width/height negative and produced a cabinet 0 px wide with a
+  // 6 px cell, which is not the same geometry the pane renders with later.
+  const w = Math.max(160, width)
+  const h = Math.max(160, height)
+  const bodyW = Math.min(w - 16, Math.max(300, Math.min(w * 0.58, 440)))
+  const bodyH = Math.min(h - 8, Math.max(220, h * 0.74))
   const pad = 16
   const winW = bodyW - pad * 2
   const winH = bodyH - pad * 2 - 12
@@ -283,6 +319,13 @@ function reelGeometry(width, height) {
   return { bodyW, bodyH, pad, winW, winH, cell, font, lineHeight, maxLines }
 }
 
+/** CSS box of the canvas — the one source of reel geometry for draw and target. */
+function canvasBox(canvas) {
+  if (!canvas) return { width: 0, height: 0 }
+  const rect = canvas.getBoundingClientRect()
+  return { width: Math.round(rect.width), height: Math.round(rect.height) }
+}
+
 /**
  * Draw a vertical reel in a slot-machine cabinet: a rounded body with a lit
  * bezel, an inset window, and the tape scrolling up past a fixed needle.
@@ -295,11 +338,9 @@ function drawReel(canvas, items, offset, winner, spinning) {
   // Match the bitmap to the element every paint. Without this the browser
   // stretches the last frame when the pane is resized, which reads as the
   // whole cabinet smearing instead of re-laying out.
-  const rect = canvas.getBoundingClientRect()
-  if (rect.width < 8 || rect.height < 8) return
+  const { width, height } = canvasBox(canvas)
+  if (width < 8 || height < 8) return
   const ratio = window.devicePixelRatio || 1
-  const width = Math.round(rect.width)
-  const height = Math.round(rect.height)
   if (canvas.width !== width * ratio || canvas.height !== height * ratio) {
     canvas.width = width * ratio
     canvas.height = height * ratio
@@ -453,6 +494,11 @@ function drawReel(canvas, items, offset, winner, spinning) {
   ctx.fill()
 }
 
+/** The ticker pivots on the rim. A fixed `y = 6` floats above a centred wheel. */
+function tickerPivot(cx, cy, radius) {
+  return { x: cx, y: cy - radius - 2 }
+}
+
 function drawWheel(canvas, items, rotation, winner, spinning, flapper) {
   const ctx = canvas.getContext('2d')
   if (!ctx || !items.length) return
@@ -602,15 +648,16 @@ function drawWheel(canvas, items, rotation, winner, spinning, flapper) {
   ctx.fill()
   ctx.globalAlpha = 1
 
-  // ticker arm pivoting at the top, deflected by the pegs
-  const pivotX = cx
-  const pivotY = 6
+  // ticker arm pivoting on the rim, deflected by the pegs
+  const pivot = tickerPivot(cx, cy, radius)
+  const pivotX = pivot.x
+  const pivotY = pivot.y
   ctx.save()
   ctx.translate(pivotX, pivotY)
   ctx.rotate(flapper)
   ctx.beginPath()
   ctx.moveTo(0, 0)
-  ctx.lineTo(0, 16)
+  ctx.lineTo(0, 18)
   ctx.lineWidth = 3
   ctx.lineCap = 'round'
   ctx.strokeStyle = accent
@@ -713,7 +760,6 @@ function WheelPane({ ctx }) {
   const canvasRef = useRef(null)
   const reelOffsetRef = useRef(0)
   const [mode, setMode] = useState('auto') // auto | wheel | reel, per wheel
-  const [box, setBox] = useState({ w: 0, h: 0 })
   const [shellH, setShellH] = useState(0)
   const shellRef = useRef(null)
   const rafRef = useRef(0)
@@ -735,25 +781,28 @@ function WheelPane({ ctx }) {
   const slotFlicker = useRef(null)
 
   const wheelsQuery = useQuery({
-    queryKey: ['wheelspin', 'wheels'],
-    queryFn: () => ctx.rest('/wheels'),
+    queryKey: ['wheelspin', 'wheels', selectedId || 'active'],
+    queryFn: () =>
+      ctx.rest(selectedId ? `/wheels?wheel=${encodeURIComponent(selectedId)}` : '/wheels'),
     refetchInterval: 3000,
     retry: 1
   })
 
-  const state = wheelsQuery.data || { wheels: [], active: '', history: [] }
+  const state = wheelsQuery.data || { wheels: [], active: '', items_for: '', history: [] }
+  // The server sends item lists only for the wheel on screen — every other entry
+  // is a summary — and `items_for` names the one that carries them. The fallback
+  // matters during an upgrade: a pane can load a frame before the router does, and
+  // an older router sends every entry with items and no `items_for` at all.
   const wheel =
-    state.wheels.find((entry) => entry.id === selectedId) ||
-    state.wheels.find((entry) => entry.id === state.active) ||
-    state.wheels[0] ||
+    state.wheels.find((entry) => entry.id === state.items_for) ||
+    state.wheels.find((entry) => Array.isArray(entry.items)) ||
     null
-  const items = wheel ? wheel.items : []
+  const items = wheel && wheel.items ? wheel.items : []
   const itemsKey = wheel ? `${wheel.id}:${wheel.updated_at}` : 'none'
 
   // Reserved whether or not there is a result yet: an empty slot lets the
   // button ride up and down as answers arrive.
   const slotHeight = Math.round(Math.max(96, Math.min(168, (shellH || 620) * 0.26)))
-  const radius = box.w > 0 && box.h > 0 ? Math.min(box.w, box.h) / 2 - 18 : 0
   // 'auto' always means the wheel: a dense wheel is still a wheel, the way the
   // streamers' tool does it — labels shrink and truncate rather than the display
   // changing shape under you. The reel is something you ask for.
@@ -794,11 +843,6 @@ function WheelPane({ ctx }) {
     const element = shellRef.current
     if (!element || typeof ResizeObserver === 'undefined') return undefined
     const observer = new ResizeObserver(() => {
-      const element = canvasRef.current
-      if (element) {
-        const ratio = window.devicePixelRatio || 1
-        setBox({ w: element.width / ratio, h: element.height / ratio })
-      }
       if (shellRef.current) setShellH(shellRef.current.clientHeight)
       paint()
     })
@@ -913,11 +957,13 @@ function WheelPane({ ctx }) {
       // Same draw, different picture: the tape scrolls until the winning cell
       // sits under the needle. `reelTarget` guarantees it travels at least a
       // few cells, so a short list still reads as a spin.
-      const element = canvasRef.current
-      const ratio = window.devicePixelRatio || 1
-      const width = element ? element.width / ratio : 600
-      const height = element ? element.height / ratio : 400
-      const { cell, font, lineHeight, maxLines } = reelGeometry(width, height)
+      // Same geometry the painter uses, from the CSS box. Reading `element.width`
+      // gave a fractional CSS width and a cell that did not match the one drawn on
+      // the next frame, so the tape stopped a few pixels off the needle.
+      const box = canvasBox(canvasRef.current)
+      const width = box.width || 600
+      const height = box.height || 400
+      const { cell } = reelGeometry(width, height)
       const from = reelOffsetRef.current
       const to = reelTarget(from, target.index, list.length, cell)
       const duration = 2100 + Math.random() * 900
@@ -938,7 +984,15 @@ function WheelPane({ ctx }) {
           rafRef.current = requestAnimationFrame(reelStep)
           return
         }
-        reelOffsetRef.current = to
+        // A resize mid-spin changes `cell`: an offset that sat on a boundary for
+        // the old cell lands mid-cell for the new one. Re-aim on the live
+        // geometry so the winner still sits under the needle.
+        const liveBox = canvasBox(canvasRef.current)
+        const liveCell = reelGeometry(liveBox.width || 600, liveBox.height || 400).cell
+        reelOffsetRef.current =
+          Math.abs(liveCell - cell) > 0.5
+            ? reelTarget(reelOffsetRef.current, target.index, list.length, liveCell)
+            : to
         setSpinning(false)
         setWinner(target.index)
         setResult(target.label)
@@ -974,7 +1028,8 @@ function WheelPane({ ctx }) {
 
     let last = performance.now()
     let travelled = 0
-    let pegIndex = Math.floor(((from + TAU * 0.25) / TAU) * list.length)
+    const starts = sectorStarts(list)
+    let pegIndex = pegIndexAt(starts, from)
     let flapper = 0
 
     const step = (now) => {
@@ -996,7 +1051,7 @@ function WheelPane({ ctx }) {
       flapper += (targetFlap - flapper) * Math.min(1, dt * (spinning ? 26 : 14))
       flapperRef.current = flapper
 
-      const index = Math.floor((rotationRef.current / TAU) * list.length)
+      const index = pegIndexAt(starts, rotationRef.current)
       if (index !== pegIndex && omega > 0) {
         pegIndex = index
         if (blip) blip.tick(omega / Math.max(1, omegaPeak))
@@ -1092,6 +1147,9 @@ function WheelPane({ ctx }) {
       setDraft('')
       setEditing(false)
       setError('')
+      // Show what was just saved: the new wheel is active, so drop any earlier
+      // selection before the refetch asks for a specific wheel.
+      setSelectedId('')
       haptic('tap')
       await wheelsQuery.refetch()
     } catch (err) {
@@ -1177,7 +1235,9 @@ function WheelPane({ ctx }) {
                       ? 'bg-(--ui-bg-quaternary) font-medium text-(--ui-text-primary)'
                       : 'text-(--ui-text-tertiary) hover:bg-(--chrome-action-hover)'
                   ),
-                  children: `${entry.name} (${entry.items.length})`
+                  children: `${entry.name} (${
+                    entry.item_count ?? (entry.items ? entry.items.length : 0)
+                  })`
                 },
                 entry.id
               )

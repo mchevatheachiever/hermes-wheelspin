@@ -7,6 +7,7 @@ Run with the Hermes runtime venv (it has fastapi):
 from __future__ import annotations
 
 import importlib.util
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -118,6 +119,42 @@ class ApiTest(unittest.TestCase):
         state = self.client.get("/api/plugins/wheelspin/wheels").json()
         labels = [item["label"] for item in state["wheels"][0]["items"]]
         self.assertEqual(labels, ["a", "b", "c"])
+
+    def test_items_are_carried_only_for_the_wheel_on_screen(self):
+        self.client.post("/api/plugins/wheelspin/wheels", json={"name": "a", "items": ["1", "2"]})
+        self.client.post("/api/plugins/wheelspin/wheels", json={"name": "b", "items": ["3", "4"]})
+
+        body = self.client.get("/api/plugins/wheelspin/wheels").json()
+        self.assertEqual(body["items_for"], "b")
+        by_id = {entry["id"]: entry for entry in body["wheels"]}
+        self.assertIn("items", by_id["b"])
+        self.assertNotIn("items", by_id["a"])
+        self.assertEqual(by_id["a"]["item_count"], 2)
+
+        # Asking for a specific wheel moves the item list to that one.
+        asked = self.client.get("/api/plugins/wheelspin/wheels?wheel=a").json()
+        self.assertEqual(asked["items_for"], "a")
+        asked_by_id = {entry["id"]: entry for entry in asked["wheels"]}
+        self.assertIn("items", asked_by_id["a"])
+        self.assertNotIn("items", asked_by_id["b"])
+
+    def test_health_fails_on_a_corrupt_store(self):
+        (Path(self.tmp.name) / "wheels.json").write_text("{not json")
+        body = self.client.get("/api/plugins/wheelspin/health").json()
+        self.assertFalse(body["ok"])
+        self.assertEqual(body["status"], "corrupt")
+        self.assertNotIn(str(self.tmp.name), json.dumps(body))
+
+    def test_error_detail_never_carries_the_store_path(self):
+        class Boom:
+            def read(self):
+                raise OSError(13, "permission denied", "/home/mcheva/.hermes/plugin-data/wheelspin/wheels.json")
+
+        with mock.patch.object(self.api, "_store", lambda: Boom()):
+            response = self.client.get("/api/plugins/wheelspin/wheels")
+        self.assertEqual(response.status_code, 500)
+        self.assertNotIn("/home/mcheva", response.text)
+        self.assertIn("wheel store unreadable", response.text)
 
 
 if __name__ == "__main__":

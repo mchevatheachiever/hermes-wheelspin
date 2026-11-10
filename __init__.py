@@ -8,7 +8,6 @@ animated canvas wheel and announces the winner back into the conversation.
 from __future__ import annotations
 
 import logging
-import sys
 from pathlib import Path
 from typing import Any
 

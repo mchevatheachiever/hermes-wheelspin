@@ -93,8 +93,9 @@ routed through the shared gateway).
 
 - **Desktop**: canvas wheel pane, peg ticker, WebAudio ticks, slot-machine
   jackpot reveal, result posted back into the chat.
-- **CLI / TUI / gateway / Discord**: block-character wheel with a pointer and a
-  probability legend, plus the `JACKPOT!!!` banner.
+- **CLI / TUI / gateway / Discord**: a wheel cannot be drawn in text and a list of
+  300 lines is not a display, so these get one belt of at most 8 rows with the
+  winner marked, a probability legend, and the `JACKPOT!!!` banner.
 
 ## Disclosure
 
@@ -127,12 +128,6 @@ runtime venv ships with it:
 python -c "import fastapi" || pip install fastapi httpx
 cd tests && python -m unittest test_api
 ```
-
-## Surfaces
-
-The Desktop pane shows a **wheel**. Text-only surfaces (chat, CLI, Discord) show a
-different thing: a strip of **one belt of at most 8 rows**, with the winner marked —
-a wheel cannot be drawn in text, and a list of 300 lines is not a display.
 
 ## License
 

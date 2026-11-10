@@ -10,7 +10,7 @@ break when the module is imported by file path (which is how plugin APIs load).
 """
 
 import importlib.util
-import json
+import logging
 import sys
 from pathlib import Path
 from typing import Any
@@ -42,6 +42,7 @@ def _load_core() -> Any:
 
 core = _load_core()
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class WheelPayload(BaseModel):
@@ -59,33 +60,49 @@ def _store() -> Any:
     return core.WheelStore()
 
 
-def _state() -> dict[str, Any]:
+def _state(selected: str | None = None) -> dict[str, Any]:
+    """Pane state, one payload per poll.
+
+    Every wheel is listed as a summary (the chip strip needs names and counts,
+    nothing else); the full item list is carried only for the wheel that is on
+    screen. Sending every item of every wheel made a 22-wheel store a 157 KB
+    response every three seconds, almost all of it for wheels nobody was
+    looking at.
+    """
     state = _store().read()
     wheels = list(state["wheels"].values())
     wheels.sort(key=lambda wheel: wheel["updated_at"], reverse=True)
+    chosen = selected if selected in state["wheels"] else state["active"]
+    if chosen not in state["wheels"]:
+        chosen = wheels[0]["id"] if wheels else ""
+    entries: list[dict[str, Any]] = []
+    for wheel in wheels:
+        entry = {
+            "id": wheel["id"],
+            "name": wheel["name"],
+            "item_count": len(wheel["items"]),
+            "source": wheel["source"],
+            "updated_at": wheel["updated_at"],
+            "total_weight": core.total_weight(wheel["items"]),
+        }
+        if wheel["id"] == chosen:
+            entry["items"] = wheel["items"]
+        entries.append(entry)
     return {
         "active": state["active"],
-        "wheels": [
-            {
-                "id": wheel["id"],
-                "name": wheel["name"],
-                "items": wheel["items"],
-                "source": wheel["source"],
-                "updated_at": wheel["updated_at"],
-                "total_weight": core.total_weight(wheel["items"]),
-            }
-            for wheel in wheels
-        ],
+        "items_for": chosen,
+        "wheels": entries,
         "history": state["history"][-12:],
     }
 
 
 @router.get("/wheels")
-async def list_wheels() -> dict[str, Any]:
+async def list_wheels(wheel: str | None = None) -> dict[str, Any]:
     try:
-        return {"ok": True, **_state()}
+        return {"ok": True, **_state(wheel)}
     except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"wheel store unreadable: {exc}") from exc
+        logger.warning("wheelspin: wheel store unreadable: %s", exc)
+        raise HTTPException(status_code=500, detail="wheel store unreadable") from exc
 
 
 @router.post("/wheels")
@@ -97,12 +114,13 @@ async def upsert_wheel(payload: WheelPayload) -> dict[str, Any]:
     except core.WheelError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"wheel store unwritable: {exc}") from exc
+        logger.warning("wheelspin: wheel store unwritable: %s", exc)
+        raise HTTPException(status_code=500, detail="wheel store unwritable") from exc
     # The store's write path answers with the wheel as written, jackpots
     # included. The pane redraws from the next GET anyway, so say what changed
     # without repeating the one thing the tools are supposed to keep quiet.
     public = {k: v for k, v in wheel.items() if k != "jackpots"}
-    return {"ok": True, "wheel": public, **_state()}
+    return {"ok": True, "wheel": public, **_state(wheel["id"])}
 
 
 @router.post("/wheels/{wheel_id}/spin")
@@ -113,7 +131,8 @@ async def spin_wheel(wheel_id: str, payload: SpinPayload | None = None) -> dict[
     except core.WheelError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"wheel store unreadable: {exc}") from exc
+        logger.warning("wheelspin: wheel store unreadable: %s", exc)
+        raise HTTPException(status_code=500, detail="wheel store unreadable") from exc
     return {"ok": True, **result}
 
 
@@ -124,21 +143,21 @@ async def delete_wheel(wheel_id: str) -> dict[str, Any]:
     except core.WheelError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"wheel store unwritable: {exc}") from exc
+        logger.warning("wheelspin: store delete failed: %s", exc)
+        raise HTTPException(status_code=500, detail="wheel store unwritable") from exc
     return {"ok": True, "removed": wheel["name"], **_state()}
 
 
 @router.get("/health")
 async def health() -> dict[str, Any]:
-    """Cheap probe: can the store be read and serialised?
+    """Cheap probe: can the store be read at all, and was it damaged?
 
-    Not used by the pane — it reports failures through the error row instead.
-    Kept for scripts and monitors that want a single unauthenticated-shaped
-    health answer.
+    Reports ``corrupt``/``unreadable`` as ``ok: false`` — an empty store and an
+    unreadable one must not look the same to a monitor. Never carries exception
+    text, because an OSError quotes the store's absolute path.
     """
     try:
-        state = _store().read()
-        json.dumps(state["wheels"], default=str)
-    except Exception as exc:  # noqa: BLE001 - reported, not raised
-        return {"ok": False, "error": str(exc)}
-    return {"ok": True, "wheels": len(state["wheels"])}
+        return _store().health()
+    except Exception:  # noqa: BLE001 - reported, not raised
+        logger.warning("wheelspin: health probe failed", exc_info=True)
+        return {"ok": False, "status": "unreadable", "wheels": 0, "error": "wheel store could not be read"}

@@ -11,6 +11,7 @@ the tool and the API can both write without truncating each other.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -112,7 +113,17 @@ def normalise_items(raw_items: Any) -> list[dict[str, Any]]:
 
 
 def slugify(name: str) -> str:
-    slug = _SLUG_RE.sub("-", str(name).strip().lower()).strip("-")[:48]
+    """Stable key for a wheel name.
+
+    The display name is bounded at 60 chars, so slugging a *truncated* name lets
+    two long names that differ only in the tail collapse onto one key — the
+    second wheel then overwrites the first, silently. Shorten with a hash of the
+    full slug instead, so the distinguishing tail still decides the id.
+    """
+    slug = _SLUG_RE.sub("-", str(name).strip().lower()).strip("-")
+    if len(slug) > 48:
+        digest = hashlib.sha1(slug.encode("utf-8")).hexdigest()[:8]
+        slug = f"{slug[:39].rstrip('-')}-{digest}"
     return slug or "wheel"
 
 
@@ -200,6 +211,11 @@ def _clean_jackpots(raw: Any, item_count: int) -> list[int]:
     if not isinstance(raw, list):
         return choose_jackpots(item_count)
     values = sorted({int(v) for v in raw if isinstance(v, (int, float)) and 0 <= int(v) < item_count})
+    if not values and item_count >= 2:
+        # Every wheel of 2+ options carries at least one jackpot, so an empty or
+        # unreadable list is damage, not a decision — re-roll rather than ship a
+        # wheel whose jackpot can never fire.
+        return choose_jackpots(item_count)
     return values[:MAX_JACKPOTS]
 
 
@@ -300,13 +316,38 @@ class WheelStore:
             finally:
                 handle.close()
 
-    def read(self) -> dict[str, Any]:
+    def _quarantine(self) -> None:
+        """Move an unreadable store aside so the next write cannot erase it.
+
+        Returns nothing: quarantine is best-effort, and a read must never raise
+        because the backup move failed.
+        """
+        try:
+            target = self.path.with_name(f"{self.path.name}.corrupt-{time.time_ns()}")
+            os.replace(self.path, target)
+        except OSError:
+            pass
+
+    def _read_state(self) -> tuple[dict[str, Any], str]:
+        """Read the store, reporting *why* it is empty when it is not readable.
+
+        ``status`` is ``ok``, ``corrupt`` (bytes did not decode as the store) or
+        ``unreadable`` (the file exists but could not be opened). A corrupt file
+        is moved aside before returning, so returning an empty state never
+        authorises the next write to overwrite the user's only copy.
+        """
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
-        except (FileNotFoundError, json.JSONDecodeError):
-            return _empty_state()
+        except FileNotFoundError:
+            return _empty_state(), "ok"
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._quarantine()
+            return _empty_state(), "corrupt"
+        except OSError:
+            return _empty_state(), "unreadable"
         if not isinstance(raw, dict):
-            return _empty_state()
+            self._quarantine()
+            return _empty_state(), "corrupt"
         state = _empty_state()
         state["active"] = str(raw.get("active") or "")
         history = raw.get("history")
@@ -319,7 +360,25 @@ class WheelStore:
                     state["wheels"][key] = clean
         if state["active"] not in state["wheels"]:
             state["active"] = next(iter(state["wheels"]), "")
-        return state
+        return state, "ok"
+
+    def read(self) -> dict[str, Any]:
+        return self._read_state()[0]
+
+    def health(self) -> dict[str, Any]:
+        """Cheap probe that can tell an empty store from an unreadable one."""
+        state, status = self._read_state()
+        report: dict[str, Any] = {
+            "ok": status == "ok",
+            "status": status,
+            "wheels": len(state["wheels"]),
+        }
+        if status == "corrupt":
+            # Never the exception text: an OSError carries the store's path.
+            report["error"] = "wheel store was corrupt and has been moved aside"
+        elif status == "unreadable":
+            report["error"] = "wheel store could not be read"
+        return report
 
     @staticmethod
     def _clean_wheel(key: str, wheel: Any) -> dict[str, Any] | None:
@@ -412,25 +471,41 @@ class WheelStore:
             self.write(state)
         return wheel
 
+    @staticmethod
+    def _resolve(state: dict[str, Any], name: str) -> tuple[str, dict[str, Any] | None]:
+        """Find a wheel by key, then by the display name the user can read.
+
+        The second pass is what keeps wheels written before the slug change —
+        and any name whose key was cut differently — reachable by their name.
+        """
+        wanted = clean_name(name)
+        wheel_id = slugify(wanted)
+        wheel = state["wheels"].get(wheel_id)
+        if wheel is None:
+            folded = wanted.casefold()
+            for key, candidate in state["wheels"].items():
+                if candidate["name"].casefold() == folded:
+                    return key, candidate
+        return wheel_id, wheel
+
     def get(self, name: str | None = None) -> dict[str, Any]:
         state = self.read()
         wheels = state["wheels"]
         if not wheels:
             raise WheelError("no wheel has been loaded yet")
         if name is None:
-            wheel_id = state["active"] or next(iter(wheels))
-        else:
-            wheel_id = slugify(clean_name(name))
-        wheel = wheels.get(wheel_id)
+            wheel = wheels.get(state["active"]) or next(iter(wheels.values()))
+            return wheel
+        _, wheel = self._resolve(state, name)
         if wheel is None:
             known = ", ".join(sorted(w["name"] for w in wheels.values()))
             raise WheelError(f"no wheel called {name!r}; known wheels: {known}")
         return wheel
 
     def delete(self, name: str) -> dict[str, Any]:
-        wheel_id = slugify(clean_name(name))
         with self._locked():
             state = self.read()
+            wheel_id, _known = self._resolve(state, name)
             wheel = state["wheels"].pop(wheel_id, None)
             if wheel is None:
                 raise WheelError(f"no wheel called {name!r}")

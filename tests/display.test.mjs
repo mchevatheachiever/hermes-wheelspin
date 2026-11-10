@@ -44,10 +44,20 @@ const REEL_MIN_CELLS = Number((source.match(/const REEL_MIN_CELLS = (\d+)/) || [
 const sandbox = new Function(
   'TAU',
   'REEL_MIN_CELLS',
-  `${extract('reelTarget')}\n${extract('easeOutQuint')}\n${extract('wrapLines')}\n${extract('bannerFontSize')}\nreturn {  reelTarget, easeOutQuint, wrapLines, bannerFontSize }`
+  `${extract('reelTarget')}\n${extract('easeOutQuint')}\n${extract('wrapLines')}\n${extract('bannerFontSize')}\n${extract('sectorStarts')}\n${extract('pegIndexAt')}\n${extract('tickerPivot')}\n${extract('reelGeometry')}\n${extract('canvasBox')}\nreturn {  reelTarget, easeOutQuint, wrapLines, bannerFontSize, sectorStarts, pegIndexAt, tickerPivot, reelGeometry, canvasBox }`
 )(TAU, REEL_MIN_CELLS)
 
-const { reelTarget, easeOutQuint, wrapLines, bannerFontSize } = sandbox
+const {
+  reelTarget,
+  easeOutQuint,
+  wrapLines,
+  bannerFontSize,
+  sectorStarts,
+  pegIndexAt,
+  tickerPivot,
+  reelGeometry,
+  canvasBox
+} = sandbox
 
 const items = (n, weight = 1) => Array.from({ length: n }, (_, i) => ({ label: `item ${i}`, weight }))
 
@@ -166,4 +176,100 @@ test('easeOutQuint starts at 0, ends at 1, never goes backwards', () => {
     assert.ok(value >= 0 && value <= 1, 'must stay in range')
     previous = value
   }
+})
+
+test('sectorStarts follows the weights, not the item count', () => {
+  const weighted = [
+    { label: 'heavy', weight: 3 },
+    { label: 'light', weight: 1 }
+  ]
+  const starts = sectorStarts(weighted)
+  assert.equal(starts.length, 2)
+  assert.equal(starts[0], 0)
+  assert.ok(Math.abs(starts[1] - TAU * 0.75) < 1e-12)
+})
+
+test('peg ticks land on the boundary that owns the angle', () => {
+  const starts = sectorStarts([
+    { label: 'a', weight: 1 },
+    { label: 'b', weight: 1 },
+    { label: 'c', weight: 2 }
+  ])
+  // Weighted boundaries at 0, 90 and 180 degrees; the last slice owns 180..360.
+  const cases = [
+    [0, 0],
+    [89, 0],
+    [90, 1],
+    [179, 1],
+    [180, 2],
+    [359, 2],
+    [360, 0],
+    [-10, 2],
+    [450, 1]
+  ]
+  for (const [deg, expected] of cases) {
+    assert.equal(pegIndexAt(starts, (deg * Math.PI) / 180), expected, `at ${deg} deg`)
+  }
+})
+
+test('the ticker hangs on the rim, not on the top of the canvas', () => {
+  const cases = [
+    { cx: 320, cy: 160, radius: 142 }, // wide, short pane
+    { cx: 320, cy: 400, radius: 142 }, // tall pane — the old fixed y=6 floated 252px above
+    { cx: 200, cy: 200, radius: 182 }
+  ]
+  for (const { cx, cy, radius } of cases) {
+    const pivot = tickerPivot(cx, cy, radius)
+    assert.equal(pivot.x, cx)
+    assert.ok(Math.abs(pivot.y - (cy - radius - 2)) < 1e-9, 'pivot must sit on the rim')
+    assert.ok(pivot.y > 0, 'pivot must stay inside the canvas')
+  }
+})
+
+test('a heavy sector does not tick once per item', () => {
+  // 9/10 of the wheel is one sector: a count-based tick would fire ten times a
+  // turn; the weighted one fires at the one real boundary (324 degrees).
+  const starts = sectorStarts([
+    { label: 'heavy', weight: 9 },
+    { label: 'light', weight: 1 }
+  ])
+  let ticks = 0
+  let previous = pegIndexAt(starts, 0)
+  for (let step = 0; step < 360; step += 1) {
+    const index = pegIndexAt(starts, (step * Math.PI) / 180)
+    if (index !== previous) ticks += 1
+    previous = index
+  }
+  assert.equal(ticks, 1, 'one boundary in a full turn')
+})
+
+
+
+test('reelGeometry survives a zero-sized or negative canvas', () => {
+  for (const [w, h] of [[0, 0], [-50, 300], [1, 1]]) {
+    const g = reelGeometry(w, h)
+    assert.ok(g.winW > 0 && g.winH > 0, `window collapsed at ${w}x${h}`)
+    assert.ok(g.bodyW > 0 && g.bodyH > 0, `cabinet collapsed at ${w}x${h}`)
+    assert.ok(g.cell >= 96, `cell collapsed at ${w}x${h}`)
+  }
+})
+
+test('canvasBox rounds the CSS box, and copes with no canvas', () => {
+  const canvas = { getBoundingClientRect: () => ({ width: 619.6, height: 400.2 }) }
+  assert.deepEqual(canvasBox(canvas), { width: 620, height: 400 })
+  assert.deepEqual(canvasBox(null), { width: 0, height: 0 })
+})
+
+test('a tape aimed for one cell size is off the needle at another', () => {
+  // A pane resize mid-spin changes `cell`; the old offset no longer lands the
+  // winner under the needle, and re-aiming has to put it back.
+  const before = reelGeometry(620, 600).cell
+  const after = reelGeometry(620, 900).cell
+  assert.notEqual(before, after, 'the two pane heights must give different cells')
+  const aimed = reelTarget(0, 3, 10, before)
+  const offBy = Math.abs((((aimed / after) % 10) + 10) % 10 - 3)
+  const resnapped = reelTarget(aimed, 3, 10, after)
+  const aligned = Math.abs((((resnapped / after) % 10) + 10) % 10 - 3)
+  assert.ok(offBy > 1e-9, 'the stale offset really was off the needle')
+  assert.ok(aligned < 1e-9, 're-aiming puts the winner back under it')
 })

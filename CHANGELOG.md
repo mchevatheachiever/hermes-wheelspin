@@ -1,5 +1,54 @@
 # Changelog
 
+## 1.2.4 — 2026-11-10
+
+Review round over the whole plugin: data safety, payload size, keys, and the
+parts of the pane nothing was testing.
+
+### Fixed
+- **A corrupt store was silently erased.** `read()` mapped a decode failure to an
+  empty state, so the next write replaced the store with it. The unreadable file
+  is now moved aside as `wheels.json.corrupt-<ns>` before an empty state is
+  returned, and the write that follows cannot touch it. The old test asserted the
+  wipe-prone read; it now asserts the bytes survive.
+- **`/health` answered `ok: true` on a damaged store**, making an empty wheel list
+  and an unreadable one indistinguishable. It now reports `status` as `ok`,
+  `corrupt` or `unreadable`, and `ok: false` for the last two.
+- **The pane polled every item of every wheel every three seconds** — 157 KB per
+  poll against a 22-wheel store. Every wheel is now a summary (`item_count`,
+  `total_weight`); only the wheel on screen carries `items`, selected with
+  `?wheel=<id>`. Same store: 41.7 KB, and a few KB against a typical wheel.
+- **Two long wheel names could collapse onto one key.** The slug was cut at 48
+  chars after the display name was bounded at 60, so names differing only in the
+  tail overwrote each other. Truncated slugs now carry a hash of the full name,
+  and lookups fall back to the display name so wheels written under the old keys
+  stay reachable.
+- **HTTP error detail carried the store's absolute path.** `/health` returned
+  `str(exc)` and the 500 handlers interpolated the OSError. The detail is now a
+  fixed string and the exception is logged.
+- **An empty stored `jackpots` list disabled the reveal permanently.** A wheel of
+  2+ options always has at least one, so an empty or unreadable list is damage —
+  it is now re-rolled instead of trusted.
+
+### Changed
+- Peg ticks are driven by the weighted sector boundaries the pegs are drawn at,
+  not by `angle / TAU × item count`. A wheel with one 9/10 sector ticked ten
+  times a turn; it now ticks once.
+- The ticker arm pivots on the rim. It was drawn at a fixed `y = 6`, so on a tall
+  pane — where the wheel is centred and smaller than the canvas — it floated in
+  empty space above the wheel, pointing at nothing.
+- The tape reel derives its cell from the same CSS box the painter uses, and
+  re-aims if the pane is resized mid-spin. It read the canvas bitmap width
+  (`element.width / devicePixelRatio`) for the target and `getBoundingClientRect`
+  for the draw, so a resize between the two left the winning row a few pixels off
+  the needle. A zero-sized canvas also produced a negative cabinet; geometry is
+  clamped now.
+- Removed the pane's unused `box`/`radius` state — the ResizeObserver re-rendered
+  on every resize for a value nothing read — and an unused import.
+- The pane tolerates a router that predates `items_for`: it falls back to the
+  first entry carrying items, so a half-installed upgrade shows the wheel instead
+  of "No wheel loaded".
+
 ## 1.2.3 — 2026-11-08
 
 ### Tests

@@ -355,9 +355,41 @@ class StoreTest(unittest.TestCase):
             self.store.get("lunch")
         self.assertIn("dinner", str(ctx.exception))
 
-    def test_corrupt_file_falls_back_to_empty(self):
-        (Path(self.tmp.name) / "wheels.json").write_text("{not json")
+    def test_corrupt_file_is_quarantined_not_overwritten(self):
+        self.store.upsert("dinner", ["pizza", "thai", "ramen"])
+        path = Path(self.tmp.name) / "wheels.json"
+        good = path.read_text()
+        path.write_text(good[: len(good) // 2])
+
+        # Reading reports an empty store, but only after the damage is preserved.
         self.assertEqual(self.store.summary()["wheels"], [])
+        backups = sorted(Path(self.tmp.name).glob("wheels.json.corrupt-*"))
+        self.assertEqual(len(backups), 1)
+        self.assertIn("dinner", backups[0].read_text())
+
+        # The next write must not be able to erase the user's only copy.
+        self.store.upsert("drinks", ["beer", "wine"])
+        self.assertEqual(
+            [wheel["name"] for wheel in self.store.read()["wheels"].values()], ["drinks"]
+        )
+        self.assertEqual(len(sorted(Path(self.tmp.name).glob("wheels.json.corrupt-*"))), 1)
+
+    def test_health_tells_an_empty_store_from_a_corrupt_one(self):
+        self.assertEqual(self.store.health(), {"ok": True, "status": "ok", "wheels": 0})
+        (Path(self.tmp.name) / "wheels.json").write_text("{not json")
+        report = self.store.health()
+        self.assertFalse(report["ok"])
+        self.assertEqual(report["status"], "corrupt")
+        self.assertNotIn(str(self.tmp.name), json.dumps(report))
+
+    def test_health_reports_an_unreadable_store_without_the_path(self):
+        self.store.upsert("dinner", ["a", "b"])
+        boom = PermissionError(13, "permission denied", str(self.store.path))
+        with mock.patch.object(Path, "read_text", side_effect=boom):
+            report = self.store.health()
+        self.assertFalse(report["ok"])
+        self.assertEqual(report["status"], "unreadable")
+        self.assertNotIn(str(self.tmp.name), json.dumps(report))
 
     def test_history_is_capped(self):
         self.store.upsert("d", ["a", "b"])
@@ -393,6 +425,62 @@ class StoreTest(unittest.TestCase):
     def test_slug_names(self):
         self.assertEqual(core.slugify("Next Game!!"), "next-game")
         self.assertEqual(core.slugify("  "), "wheel")
+
+    def test_long_names_keep_distinct_keys(self):
+        base = "a" * 55
+        one, two = core.slugify(base + "one"), core.slugify(base + "two")
+        self.assertNotEqual(one, two)
+        self.assertLessEqual(len(one), 48)
+
+    def test_long_named_wheels_do_not_overwrite_each_other(self):
+        base = "a" * 55
+        self.store.upsert(base + "one", ["x", "y"])
+        self.store.upsert(base + "two", ["p", "q"])
+        self.assertEqual(len(self.store.read()["wheels"]), 2)
+        self.assertEqual(self.store.get(base + "two")["items"][0]["label"], "p")
+
+    def test_a_legacy_truncated_key_is_reachable_by_display_name(self):
+        name = "b" * 55 + "tail"
+        legacy_id = "b" * 48
+        state = {
+            "version": 1,
+            "active": legacy_id,
+            "history": [],
+            "wheels": {
+                legacy_id: {
+                    "id": legacy_id,
+                    "name": name,
+                    "items": [{"label": "x", "weight": 1}, {"label": "y", "weight": 1}],
+                    "jackpots": [0],
+                    "source": "",
+                    "created_at": 1.0,
+                    "updated_at": 1.0,
+                }
+            },
+        }
+        (Path(self.tmp.name) / "wheels.json").write_text(json.dumps(state))
+        self.assertEqual(self.store.get(name)["id"], legacy_id)
+        self.assertEqual(self.store.delete(name)["id"], legacy_id)
+
+    def test_empty_jackpot_list_is_rerolled(self):
+        state = {
+            "version": 1,
+            "active": "d",
+            "history": [],
+            "wheels": {
+                "d": {
+                    "id": "d",
+                    "name": "d",
+                    "items": [{"label": label, "weight": 1} for label in "abcde"],
+                    "jackpots": [],
+                    "source": "",
+                    "created_at": 1.0,
+                    "updated_at": 1.0,
+                }
+            },
+        }
+        (Path(self.tmp.name) / "wheels.json").write_text(json.dumps(state))
+        self.assertGreaterEqual(len(self.store.get("d")["jackpots"]), 1)
 
 
 if __name__ == "__main__":
