@@ -145,6 +145,14 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(body["status"], "corrupt")
         self.assertNotIn(str(self.tmp.name), json.dumps(body))
 
+    def test_a_non_utf8_store_serves_an_empty_list(self):
+        (Path(self.tmp.name) / "wheels.json").write_bytes(b"\xff\xfe{}")
+        response = self.client.get("/api/plugins/wheelspin/wheels")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["wheels"], [])
+        health = self.client.get("/api/plugins/wheelspin/health").json()
+        self.assertEqual(health["corrupt_backups"], 1)
+
     def test_error_detail_never_carries_the_store_path(self):
         class Boom:
             def read(self):

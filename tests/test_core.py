@@ -668,6 +668,19 @@ class QuarantineRaceTest(unittest.TestCase):
             self.assertEqual(list(root.glob("wheels.json.corrupt-*")), [])
             self.assertIn("dinner", store.read()["wheels"])
 
+    def test_a_non_utf8_store_is_quarantined_not_raised(self):
+        # N30: the re-check called read_text, whose UnicodeDecodeError is a
+        # ValueError, so it escaped both handlers and 500'd the route.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "wheels.json"
+            path.write_bytes(b"\xff\xfe{}")
+            store = core.WheelStore(Path(tmp))
+            self.assertEqual(store.read()["wheels"], {})
+            self.assertFalse(path.exists(), "the undecodable file must be moved aside")
+            backups = list(Path(tmp).glob("wheels.json.corrupt-*"))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0].read_bytes(), b"\xff\xfe{}")
+
     def test_quarantine_still_moves_bytes_that_are_corrupt(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "wheels.json"

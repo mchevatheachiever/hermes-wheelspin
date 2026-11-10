@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.2.7 — 2026-11-10
+
+One regression from the 1.2.6 quarantine re-check, found in the same review thread.
+
+### Fixed
+- **N30 — a non-UTF-8 store raised instead of being quarantined.** `_still_unreadable`
+  read the file with `read_text`, and `UnicodeDecodeError` is a `ValueError`, so it
+  escaped the `except OSError` in the same method *and* the `OSError` guard around
+  the quarantine — the original decode error then propagated out of `read()` and
+  `GET /wheels` returned 500. Introduced by the 1.2.6 fix for N22; the earlier
+  test used a valid-UTF-8 corrupt payload, so it never exercised this path. The
+  decode failure is now treated as "still corrupt" and the file is quarantined as
+  before. Tests: the decoder path in the store (bytes preserved in the backup) and
+  at the API (`GET /wheels` 200 empty, `/health` reports the backup).
+
 ## 1.2.6 — 2026-11-10
 
 Seventh-round fixes from the same review thread: N22 re-opened, N29 new.

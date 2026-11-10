@@ -386,6 +386,12 @@ class WheelStore:
         """True if the file at the path right now still cannot be used as a store."""
         try:
             text = self.path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            # Bytes that do not decode are exactly what quarantine exists for —
+            # and UnicodeDecodeError is a ValueError, so it does not fall into the
+            # OSError branch below. Catching it here is what keeps the pane from
+            # reporting a hard error on a UTF-16 or half-written file.
+            return True
         except OSError:
             return False
         try:
