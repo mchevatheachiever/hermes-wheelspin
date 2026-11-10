@@ -65,7 +65,10 @@ def wheelspin_load(args: dict, **kwargs: Any) -> str:
 def wheelspin_spin(args: dict, **kwargs: Any) -> str:
     del kwargs
     store = _store()
-    count = args.get("count") or 1
+    try:
+        count = int(args.get("count") or 1)
+    except (TypeError, ValueError):
+        return tool_error("count must be a whole number")
     try:
         if args.get("items"):
             loaded = store.upsert(args.get("name") or "wheel", args["items"])

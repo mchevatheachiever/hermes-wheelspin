@@ -20,7 +20,7 @@ import secrets
 import tempfile
 import time
 from contextlib import contextmanager
-from typing import Any, Iterable, Iterator, Sequence
+from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 try:  # POSIX advisory locking; absent on Windows, where we degrade to no lock.
     import fcntl
@@ -207,10 +207,68 @@ def _as_float(value: Any, default: float = 0.0) -> float:
     return number or default
 
 
+def _as_name(value: Any, default: str) -> str:
+    """A stored name that is not text must not raise out of read()."""
+    if isinstance(value, str):
+        return clean_name(value, default=default)
+    return default
+
+
+def _as_int(value: Any, default: int) -> int:
+    """Finite ints only — `int(nan)` and `int(inf)` raise."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(number):
+        return default
+    return int(number)
+
+
+def _salvage_items(raw_items: Any) -> list[dict[str, Any]]:
+    """Best-effort item list: skip a broken entry, never drop the wheel.
+
+    `normalise_items` is for input and raises on anything it dislikes. A wheel
+    that is already stored is not input: losing it would lose the user's data on
+    the next write, so a bad row is skipped and the rest are kept.
+    """
+    if isinstance(raw_items, str):
+        raw_items = raw_items.splitlines()
+    if not isinstance(raw_items, Iterable) or isinstance(raw_items, Mapping):
+        return []
+    merged: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for raw in raw_items:
+        try:
+            if isinstance(raw, dict):
+                label = _clean_label(raw.get("label", raw.get("text", raw.get("name"))))
+                weight = _clean_weight(raw.get("weight"))
+            else:
+                label = _clean_label(raw)
+                weight = 1
+        except WheelError:
+            continue
+        key = label.casefold()
+        if key in merged:
+            merged[key]["weight"] = min(MAX_WEIGHT, merged[key]["weight"] + weight)
+            continue
+        merged[key] = {"label": label, "weight": weight}
+        order.append(key)
+        if len(order) >= MAX_ITEMS:
+            break
+    return [merged[key] for key in order]
+
+
 def _clean_jackpots(raw: Any, item_count: int) -> list[int]:
     if not isinstance(raw, list):
         return choose_jackpots(item_count)
-    values = sorted({int(v) for v in raw if isinstance(v, (int, float)) and 0 <= int(v) < item_count})
+    values = sorted(
+        {
+            _as_int(v, -1)
+            for v in raw
+            if _as_int(v, -1) >= 0 and _as_int(v, -1) < item_count
+        }
+    )
     if not values and item_count >= 2:
         # Every wheel of 2+ options carries at least one jackpot, so an empty or
         # unreadable list is damage, not a decision — re-roll rather than ship a
@@ -249,6 +307,7 @@ def draw_hierarchical(
     if not items:
         raise WheelError("cannot spin an empty wheel")
 
+    per = max(2, _as_int(per, MAX_SECTORS))
     if len(items) <= per:
         index = draw_index(items, rng)
         return {
@@ -316,19 +375,24 @@ class WheelStore:
             finally:
                 handle.close()
 
-    def _quarantine(self) -> None:
+    def _quarantine(self, *, locked: bool = False) -> None:
         """Move an unreadable store aside so the next write cannot erase it.
 
-        Returns nothing: quarantine is best-effort, and a read must never raise
-        because the backup move failed.
+        Runs under the store lock unless the caller already holds it: a reader
+        that quarantines the file while a writer is mid-replace would otherwise
+        move the *fresh* store aside and reset the active path.
         """
         try:
             target = self.path.with_name(f"{self.path.name}.corrupt-{time.time_ns()}")
-            os.replace(self.path, target)
+            if locked:
+                os.replace(self.path, target)
+            else:
+                with self._locked():
+                    os.replace(self.path, target)
         except OSError:
             pass
 
-    def _read_state(self) -> tuple[dict[str, Any], str]:
+    def _read_state(self, *, locked: bool = False) -> tuple[dict[str, Any], str]:
         """Read the store, reporting *why* it is empty when it is not readable.
 
         ``status`` is ``ok``, ``corrupt`` (bytes did not decode as the store) or
@@ -341,12 +405,12 @@ class WheelStore:
         except FileNotFoundError:
             return _empty_state(), "ok"
         except (json.JSONDecodeError, UnicodeDecodeError):
-            self._quarantine()
+            self._quarantine(locked=locked)
             return _empty_state(), "corrupt"
         except OSError:
             return _empty_state(), "unreadable"
         if not isinstance(raw, dict):
-            self._quarantine()
+            self._quarantine(locked=locked)
             return _empty_state(), "corrupt"
         state = _empty_state()
         state["active"] = str(raw.get("active") or "")
@@ -355,23 +419,36 @@ class WheelStore:
         wheels = raw.get("wheels")
         if isinstance(wheels, dict):
             for key, wheel in wheels.items():
-                clean = self._clean_wheel(key, wheel)
+                clean = self._clean_wheel(str(key), wheel)
                 if clean is not None:
-                    state["wheels"][key] = clean
+                    state["wheels"][clean["id"]] = clean
         if state["active"] not in state["wheels"]:
             state["active"] = next(iter(state["wheels"]), "")
         return state, "ok"
 
-    def read(self) -> dict[str, Any]:
-        return self._read_state()[0]
+    def read(self, *, locked: bool = False) -> dict[str, Any]:
+        return self._read_state(locked=locked)[0]
+
+    def _corrupt_backups(self) -> list[str]:
+        try:
+            return sorted(p.name for p in self.root.glob(f"{self.path.name}.corrupt-*"))
+        except OSError:  # pragma: no cover - unreadable directory
+            return []
 
     def health(self) -> dict[str, Any]:
-        """Cheap probe that can tell an empty store from an unreadable one."""
+        """Probe that can tell an empty store from one that just lost its file.
+
+        ``status`` is only honest on the read that discovers the damage — the
+        file is gone by the next call — so the quarantine leftovers are reported
+        too: ``corrupt_backups: 0`` means nothing was ever moved aside.
+        """
         state, status = self._read_state()
+        backups = self._corrupt_backups()
         report: dict[str, Any] = {
             "ok": status == "ok",
             "status": status,
             "wheels": len(state["wheels"]),
+            "corrupt_backups": len(backups),
         }
         if status == "corrupt":
             # Never the exception text: an OSError carries the store's path.
@@ -382,15 +459,19 @@ class WheelStore:
 
     @staticmethod
     def _clean_wheel(key: str, wheel: Any) -> dict[str, Any] | None:
+        """Coerce a stored wheel without raising, and without dropping it.
+
+        `clean_name` and `_clean_jackpots` used to raise on a non-string name or a
+        NaN jackpot, which took the whole read down; and a wheel whose items
+        failed normalisation was returned as `None`, so the next write erased it.
+        Only a value that is not an object at all is discarded now.
+        """
         if not isinstance(wheel, dict):
             return None
-        try:
-            items = normalise_items(wheel.get("items") or [])
-        except WheelError:
-            return None
+        items = _salvage_items(wheel.get("items"))
         return {
             "id": key,
-            "name": clean_name(wheel.get("name"), default=key),
+            "name": _as_name(wheel.get("name"), default=key),
             "items": items,
             "jackpots": _clean_jackpots(wheel.get("jackpots"), len(items)),
             "source": str(wheel.get("source") or "")[:200],
@@ -426,12 +507,14 @@ class WheelStore:
         if mode not in {"replace", "append"}:
             raise WheelError("mode must be 'replace' or 'append'")
         display = clean_name(name)
-        wheel_id = slugify(display)
         normalised = normalise_items(items)
 
         with self._locked():
-            state = self.read()
-            existing = state["wheels"].get(wheel_id)
+            state = self.read(locked=True)
+            # Resolve by key *and* by display name: a wheel written under the old
+            # truncated slug would otherwise be duplicated by a re-load under the
+            # hashed key.
+            wheel_id, existing = self._resolve(state, name)
             now = time.time()
             if existing is not None and mode == "append":
                 merged: list[dict[str, Any]] = list(existing["items"])
@@ -504,7 +587,7 @@ class WheelStore:
 
     def delete(self, name: str) -> dict[str, Any]:
         with self._locked():
-            state = self.read()
+            state = self.read(locked=True)
             wheel_id, _known = self._resolve(state, name)
             wheel = state["wheels"].pop(wheel_id, None)
             if wheel is None:
@@ -515,7 +598,7 @@ class WheelStore:
         return wheel
 
     def spin(self, name: str | None = None, count: int = 1) -> dict[str, Any]:
-        count = max(1, min(10, int(count)))
+        count = max(1, min(10, _as_int(count, 1)))
         wheel = self.get(name)
         draws = [draw_hierarchical(wheel["items"]) for _ in range(count)]
         winners = [draw["index"] for draw in draws]
@@ -533,7 +616,7 @@ class WheelStore:
         # during a burst does not rewrite the file per spin.
         try:
             with self._locked():
-                state = self.read()
+                state = self.read(locked=True)
                 state["history"].extend(records)
                 self.write(state)
         except OSError:  # read-only home: the draw still stands
@@ -542,7 +625,7 @@ class WheelStore:
             "wheel": wheel["name"],
             "wheel_id": wheel["id"],
             "items": len(wheel["items"]),
-            "jackpot": bool(winners and winners[0] in wheel["jackpots"]),
+            "jackpot": any(index in wheel["jackpots"] for index in winners),
             "belts": len(magazines(wheel["items"])) if len(wheel["items"]) > MAX_SECTORS else 1,
             # The UI replays this: one entry per stage, last entry holds the winner.
             "path": draws[0]["path"],

@@ -135,7 +135,6 @@ def render_art(
 def render_result(spin: dict[str, Any]) -> str:
     """Full text block for one spin result: art + headline."""
     path = spin.get("path") or []
-    winner = spin["winners"][0]
     is_jackpot = bool(spin.get("jackpot"))
 
     # Big wheels feed through belts; the last stage holds the sector that won.
@@ -158,10 +157,11 @@ def render_result(spin: dict[str, Any]) -> str:
     art_text = (
         render_art(shown, stage_index, title=title, jackpot=is_jackpot) if shown else ""
     )
-    if len(spin["winners"]) > 1:
-        headline = "★ The wheel says: " + ", ".join(w["label"] for w in spin["winners"])
-    elif is_jackpot:
-        headline = f"JACKPOT!!! ★ The wheel says: {winner['label']}"
+    labels = ", ".join(w["label"] for w in spin["winners"])
+    if is_jackpot:
+        # The proceedings flag is "any winner was a jackpot", so the headline
+        # must not disappear just because the draw asked for more than one.
+        headline = f"JACKPOT!!! ★ The wheel says: {labels}"
     else:
-        headline = f"★ The wheel says: {winner['label']}"
+        headline = f"★ The wheel says: {labels}"
     return (art_text + "\n\n" + headline).strip() if art_text else headline

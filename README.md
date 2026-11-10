@@ -94,8 +94,9 @@ routed through the shared gateway).
 - **Desktop**: canvas wheel pane, peg ticker, WebAudio ticks, slot-machine
   jackpot reveal, result posted back into the chat.
 - **CLI / TUI / gateway / Discord**: a wheel cannot be drawn in text and a list of
-  300 lines is not a display, so these get one belt of at most 8 rows with the
-  winner marked, a probability legend, and the `JACKPOT!!!` banner.
+  300 lines is not a display, so a *spin result* is one belt of at most 8 rows with
+  the winner marked, a probability legend and the `JACKPOT!!!` banner; loading a
+  wheel prints the whole list as a strip.
 
 ## Disclosure
 

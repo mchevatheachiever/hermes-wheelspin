@@ -1,5 +1,52 @@
 # Changelog
 
+## 1.2.5 — 2026-11-10
+
+Second review round (P2P review by monadbot, findings N19–N28). Every item was
+reproduced before it was fixed.
+
+### Fixed
+- **N19 — the pane could animate a list the backend did not draw from.** A
+  same-id load landing inside the 3 s poll window left `itemsRef` stale; an index
+  past the end threw out of `sectorGeometry` and left the button on "Good luck…",
+  and an equal-length list landed the pointer on the wrong sector. The pane now
+  checks `list[target.index].label === target.label`, refetches and re-finds the
+  winner by label (labels are unique), and fails cleanly with the spinner cleared.
+  `paint()` is wrapped so a draw error can never leave a stuck button.
+- **N20 — a manual display-mode choice leaked across wheels.** `userChose` was
+  never reset, so after the first 🎰 press no other wheel restored its saved mode.
+  It resets when the displayed wheel changes.
+- **N21 — semantic corruption raised or was silently erased.** `name: 123` raised
+  `WheelError` out of `read()`, `jackpots: [NaN]` raised `ValueError`, and a wheel
+  whose items failed normalisation was dropped and then overwritten by the next
+  write. Fields are now coerced through `_as_name` / `_as_int` / `_salvage_items`,
+  which skip a bad row instead of losing the wheel.
+- **N22 — quarantine ran outside the store lock.** A reader could move a freshly
+  written store aside. `_quarantine` takes the advisory lock unless the caller
+  already holds it (`read(locked=True)` from the write paths).
+- **N23 — `/health` was only honest for the first reader.** It now reports
+  `corrupt_backups`, so a monitor can tell "always empty" from "just lost its
+  store" after the pane's poll has already quarantined the file.
+- **N24 — `draw_hierarchical(per=1)` recursed forever.** `per` is clamped to 2 at
+  entry, matching what `magazines` always did.
+- **N25 — pegs recomputed `sectorGeometry` per peg per frame.** One
+  `sectorStarts(items)` before the loop: 2000 items, 4.05 ms → 0.71 ms per frame.
+- **N26 — re-loading a legacy long-named wheel duplicated it.** `upsert` resolved
+  only by slug; it now adopts the key `_resolve` finds by display name.
+- **N27 — a jackpot on a multi-draw was invisible.** `jackpot` is now true if any
+  winner is one, and the `JACKPOT!!!` headline takes precedence over the
+  multi-winner form in `art.render_result`.
+- **N28 — a new `AudioContext` per spin, never closed.** One module-level context
+  is shared by every spin.
+
+### Small
+- `drawWheel` clamps `radius` to ≥ 4; a squeezed canvas used to produce a negative
+  radius and `ctx.arc` throws `IndexSizeError`.
+- `wheelspin_spin` rejects a non-numeric `count` with a tool error instead of
+  letting `int()` raise out of the handler.
+- README: the one-belt description is scoped to spin results; loading a wheel
+  prints the whole list.
+
 ## 1.2.4 — 2026-11-10
 
 Review round over the whole plugin: data safety, payload size, keys, and the

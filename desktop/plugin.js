@@ -62,17 +62,20 @@ function readVar(el, name, fallback) {
   return (value || '').trim() || fallback
 }
 
+// One context for the whole plugin. A kit per spin allocated a new AudioContext
+// on every press and nothing ever closed them; browsers cap how many a page may
+// hold, and the cap is not something to discover by ear.
+let audioCtx = null
+function audioContext() {
+  const Ctx = typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext)
+  if (!Ctx) return null
+  if (!audioCtx) audioCtx = new Ctx()
+  if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {})
+  return audioCtx
+}
+
 function makeBlip() {
-  let audio = null
-  const context = () => {
-    if (!audio) {
-      const Ctx = window.AudioContext || window.webkitAudioContext
-      if (!Ctx) return null
-      audio = new Ctx()
-    }
-    if (audio.state === 'suspended') audio.resume().catch(() => {})
-    return audio
-  }
+  const context = () => audioContext()
 
   const noise = (ctx, seconds, gainPeak, filterHz) => {
     const frames = Math.floor(ctx.sampleRate * seconds)
@@ -522,7 +525,9 @@ function drawWheel(canvas, items, rotation, winner, spinning, flapper) {
 
   const cx = width / 2
   const cy = height / 2
-  const radius = Math.min(cx, cy) - 18
+  // A squeezed pane (8–36 px) gave a negative radius and `ctx.arc` throws
+  // IndexSizeError, which is a dead pane rather than a small one.
+  const radius = Math.max(4, Math.min(cx, cy) - 18)
   const total = items.reduce((sum, item) => sum + item.weight, 0) || 1
 
   // Everything the wheel body draws — sectors, labels, pegs — is clipped to the
@@ -627,9 +632,9 @@ function drawWheel(canvas, items, rotation, winner, spinning, flapper) {
   ctx.globalAlpha = 1
 
   // pegs on the rim — one per sector boundary, these are what the ticker hits
+  const pegStarts = sectorStarts(items)
   items.forEach((item, index) => {
-    const { start } = sectorGeometry(items, index)
-    const pegAngle = rotation - Math.PI / 2 + start
+    const pegAngle = rotation - Math.PI / 2 + pegStarts[index]
     const px = cx + Math.cos(pegAngle) * (radius - 2)
     const py = cy + Math.sin(pegAngle) * (radius - 2)
     ctx.beginPath()
@@ -812,18 +817,25 @@ function WheelPane({ ctx }) {
 
   const paint = useCallback(() => {
     if (!canvasRef.current) return
-    if (reelViewRef.current) {
-      drawReel(canvasRef.current, itemsRef.current, reelOffsetRef.current, winner, spinning)
-      return
+    try {
+      if (reelViewRef.current) {
+        drawReel(canvasRef.current, itemsRef.current, reelOffsetRef.current, winner, spinning)
+        return
+      }
+      drawWheel(
+        canvasRef.current,
+        itemsRef.current,
+        rotationRef.current,
+        winner,
+        spinning,
+        flapperRef.current
+      )
+    } catch (err) {
+      // An exception inside a rAF callback kills the rest of the animation with
+      // nothing on screen and leaves the button on "Good luck…" forever.
+      setSpinning(false)
+      setError(`draw failed: ${err && err.message ? err.message : err}`)
     }
-    drawWheel(
-      canvasRef.current,
-      itemsRef.current,
-      rotationRef.current,
-      winner,
-      spinning,
-      flapperRef.current
-    )
   }, [spinning, winner])
 
   useEffect(() => {
@@ -947,9 +959,32 @@ function WheelPane({ ctx }) {
     }
 
     const target = outcome.winners[0]
-    const list = itemsRef.current
-    if (!list.length) {
+    let list = itemsRef.current
+    // The backend drew from the stored wheel; the pane animates from the copy it
+    // last polled. A same-id load inside the 3 s poll window makes those differ,
+    // and then `sectorGeometry(list, target.index)` throws or the pointer lands
+    // on the wrong sector while the banner names another.
+    let index = list[target.index] && list[target.index].label === target.label ? target.index : -1
+    if (index < 0) {
+      try {
+        const fresh = await wheelsQuery.refetch()
+        const row = fresh && fresh.data && fresh.data.wheels
+          ? fresh.data.wheels.find((entry) => entry.id === wheel.id)
+          : null
+        if (row && Array.isArray(row.items)) {
+          list = row.items
+          itemsRef.current = list
+        }
+      } catch {
+        /* keep the list we have and fail cleanly below */
+      }
+      // Labels are unique inside a wheel (the store merges duplicates), so the
+      // label is a safe second key for the index.
+      index = list.findIndex((item) => item.label === target.label)
+    }
+    if (index < 0 || !list[index]) {
       setSpinning(false)
+      setError('the wheel changed while it was spinning — press Try your luck again')
       return
     }
 
@@ -965,7 +1000,7 @@ function WheelPane({ ctx }) {
       const height = box.height || 400
       const { cell } = reelGeometry(width, height)
       const from = reelOffsetRef.current
-      const to = reelTarget(from, target.index, list.length, cell)
+      const to = reelTarget(from, index, list.length, cell)
       const duration = 2100 + Math.random() * 900
       const started = performance.now()
       const blip = soundKit
@@ -991,10 +1026,10 @@ function WheelPane({ ctx }) {
         const liveCell = reelGeometry(liveBox.width || 600, liveBox.height || 400).cell
         reelOffsetRef.current =
           Math.abs(liveCell - cell) > 0.5
-            ? reelTarget(reelOffsetRef.current, target.index, list.length, liveCell)
+            ? reelTarget(reelOffsetRef.current, index, list.length, liveCell)
             : to
         setSpinning(false)
-        setWinner(target.index)
+        setWinner(index)
         setResult(target.label)
         setTick((value) => value + 1)
         haptic('tap')
@@ -1011,7 +1046,7 @@ function WheelPane({ ctx }) {
     }
 
     // Solve for the exact stop angle, then for the ω0 that friction will carry there.
-    const { start, sweep } = sectorGeometry(list, target.index)
+    const { start, sweep } = sectorGeometry(list, index)
     // A hair off centre at most. The old ±30% of a sector meant a 6-item wheel
     // stopped with the winner visibly beside the pointer, not under it.
     const jitter = (Math.random() - 0.5) * sweep * 0.16
@@ -1067,7 +1102,7 @@ function WheelPane({ ctx }) {
       rotationRef.current = from + distance
       flapperRef.current = 0
       setSpinning(false)
-      setWinner(target.index)
+      setWinner(index)
       setResult(target.label)
       setTick((value) => value + 1)
       haptic('tap')
@@ -1092,6 +1127,10 @@ function WheelPane({ ctx }) {
     if (!wheel) return undefined
     if (loadedFor.current === wheel.id) return undefined
     loadedFor.current = wheel.id
+    // A manual choice belongs to the wheel it was made on. Without this reset the
+    // first 🎰 press pinned `userChose` for the session and every later wheel
+    // inherited it instead of restoring its own saved mode.
+    userChose.current = false
     ;(async () => {
       let saved = 'auto'
       try {

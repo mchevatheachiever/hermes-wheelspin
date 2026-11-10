@@ -375,12 +375,25 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(len(sorted(Path(self.tmp.name).glob("wheels.json.corrupt-*"))), 1)
 
     def test_health_tells_an_empty_store_from_a_corrupt_one(self):
-        self.assertEqual(self.store.health(), {"ok": True, "status": "ok", "wheels": 0})
+        self.assertEqual(
+            self.store.health(),
+            {"ok": True, "status": "ok", "wheels": 0, "corrupt_backups": 0},
+        )
         (Path(self.tmp.name) / "wheels.json").write_text("{not json")
         report = self.store.health()
         self.assertFalse(report["ok"])
         self.assertEqual(report["status"], "corrupt")
+        self.assertEqual(report["corrupt_backups"], 1)
         self.assertNotIn(str(self.tmp.name), json.dumps(report))
+
+    def test_health_stays_truthful_after_the_first_reader_quarantined(self):
+        # N23: the pane's poll is usually the first reader, so `/health` must still
+        # show that a store was moved aside rather than reporting a clean empty one.
+        (Path(self.tmp.name) / "wheels.json").write_text("{not json")
+        self.store.read()
+        report = core.WheelStore(Path(self.tmp.name)).health()
+        self.assertEqual(report["status"], "ok")
+        self.assertEqual(report["corrupt_backups"], 1)
 
     def test_health_reports_an_unreadable_store_without_the_path(self):
         self.store.upsert("dinner", ["a", "b"])
@@ -481,6 +494,143 @@ class StoreTest(unittest.TestCase):
         }
         (Path(self.tmp.name) / "wheels.json").write_text(json.dumps(state))
         self.assertGreaterEqual(len(self.store.get("d")["jackpots"]), 1)
+
+
+class SemanticCorruptionTest(unittest.TestCase):
+    """N21: a stored wheel with a bad field must not raise, and must not vanish."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = core.WheelStore(Path(self.tmp.name))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _seed(self, wheel):
+        state = {
+            "version": 1,
+            "active": "a",
+            "history": [],
+            "wheels": {
+                "a": {
+                    "id": "a",
+                    "name": "a",
+                    "items": [{"label": "x", "weight": 1}, {"label": "y", "weight": 1}],
+                    "jackpots": [0],
+                    "source": "",
+                    "created_at": 1.0,
+                    "updated_at": 1.0,
+                },
+                "b": wheel,
+            },
+        }
+        (self.store.root / "wheels.json").write_text(json.dumps(state))
+
+    def test_non_string_name_does_not_raise(self):
+        self.store.root.mkdir(parents=True, exist_ok=True)
+        (self.store.path).write_text(
+            '{"version":1,"active":"b","history":[],"wheels":'
+            '{"b":{"id":"b","name":123,"items":[{"label":"p","weight":1},{"label":"q","weight":1}],"jackpots":[0],"source":"","created_at":1,"updated_at":1}}}'
+        )
+        wheels = self.store.read()["wheels"]
+        self.assertIn("b", wheels)
+        self.assertEqual(wheels["b"]["name"], "b")
+
+    def test_nan_jackpot_does_not_raise(self):
+        self.store.root.mkdir(parents=True, exist_ok=True)
+        (self.store.path).write_text(
+            '{"version":1,"active":"b","history":[],"wheels":'
+            '{"b":{"id":"b","name":"b","items":[{"label":"p","weight":1},{"label":"q","weight":1}],"jackpots":[NaN],"source":"","created_at":1,"updated_at":1}}}'
+        )
+        wheel = self.store.read()["wheels"]["b"]
+        self.assertGreaterEqual(len(wheel["jackpots"]), 1)
+        self.assertTrue(all(isinstance(i, int) for i in wheel["jackpots"]))
+
+    def test_a_wheel_with_bad_items_is_preserved_not_erased(self):
+        self._seed(
+            {
+                "id": "b",
+                "name": "b",
+                "items": [{"label": "keep", "weight": 1}, {"weight": 5}, 17, {"label": ""}],
+                "jackpots": [0],
+                "source": "",
+                "created_at": 1.0,
+                "updated_at": 1.0,
+            }
+        )
+        self.assertEqual([i["label"] for i in self.store.read()["wheels"]["b"]["items"]], ["keep"])
+        self.store.upsert("c", ["z", "w"])
+        stored = json.loads(self.store.path.read_text())
+        self.assertIn("b", stored["wheels"], "the next write must not erase a preserved wheel")
+
+
+class DrawEdgeTest(unittest.TestCase):
+    def test_per_one_does_not_recurse(self):
+        # N24: magazines clamps per to 2, but the recursion guard compared against
+        # the raw value and never terminated.
+        result = core.draw_hierarchical(core.normalise_items(["a", "b"]), per=1)
+        self.assertIn(result["index"], (0, 1))
+
+    def test_a_bad_count_falls_back_to_one_draw(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = core.WheelStore(Path(tmp))
+            store.upsert("d", ["a", "b"])
+            self.assertEqual(len(store.spin("d", count="abc")["winners"]), 1)  # type: ignore[arg-type]
+
+
+class LegacyKeyTest(unittest.TestCase):
+    def test_reloading_a_legacy_long_name_adopts_its_key(self):
+        # N26: get/delete found the old key by display name, upsert did not, so a
+        # re-load created a second wheel beside the first.
+        name = "b" * 55 + "tail"
+        legacy = "b" * 48
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "wheels.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "active": legacy,
+                        "history": [],
+                        "wheels": {
+                            legacy: {
+                                "id": legacy,
+                                "name": name,
+                                "items": [{"label": "x", "weight": 1}, {"label": "y", "weight": 1}],
+                                "jackpots": [0],
+                                "source": "",
+                                "created_at": 1.0,
+                                "updated_at": 1.0,
+                            }
+                        },
+                    }
+                )
+            )
+            store = core.WheelStore(Path(tmp))
+            self.assertEqual(store.upsert(name, ["x", "y"])["id"], legacy)
+            self.assertEqual(sorted(store.read()["wheels"]), [legacy])
+
+
+class JackpotTests(unittest.TestCase):
+    def test_a_jackpot_on_any_draw_sets_the_flag(self):
+        # N27: the flag only reflected winners[0], so a jackpot on draw 2 was lost.
+        with tempfile.TemporaryDirectory() as tmp:
+            store = core.WheelStore(Path(tmp))
+            wheel = store.upsert("d", ["a", "b", "c", "d", "e"])
+            plain = next(i for i in range(5) if i not in wheel["jackpots"])
+            order = [plain, wheel["jackpots"][0]]
+            with mock.patch.object(core, "draw_index", side_effect=order * 5):
+                self.assertTrue(store.spin("d", count=2)["jackpot"])
+
+    def test_a_multi_draw_jackpot_keeps_the_headline(self):
+        spin = {
+            "wheel": "w",
+            "winners": [{"label": "one"}, {"label": "two"}],
+            "jackpot": True,
+            "belts": 1,
+            "path": [{"kind": "items", "labels": ["a", "b", "c"], "weights": [1, 1, 1], "chosen": 0}],
+        }
+        self.assertIn("JACKPOT!!!", art.render_result(spin).splitlines()[-1])
 
 
 if __name__ == "__main__":
